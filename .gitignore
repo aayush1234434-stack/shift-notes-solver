@@ -6,6 +6,8 @@ __pycache__/
 *.py[cod]
 .DS_Store
 logs/
+experiments/runs/
+work/
 answers*.json
 dist/
 *.egg-info/
