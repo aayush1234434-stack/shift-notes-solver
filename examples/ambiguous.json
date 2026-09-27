@@ -1,0 +1,10 @@
+{
+  "people": ["Alice", "Bob", "Carla"],
+  "blocks": ["07:00", "09:00", "11:00"],
+  "stations": ["intake", "packing"],
+  "station_holders": ["Alice", "Carla"],
+  "constraints": [
+    {"type": "fixed_block", "person": "Alice", "block": "07:00", "source_line": 2, "source": "Alice works at 07:00."},
+    {"type": "not_station", "person": "Alice", "station": "packing", "source_line": 3, "source": "Alice is not assigned to packing."}
+  ]
+}

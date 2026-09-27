@@ -1,0 +1,12 @@
+{
+  "people": ["Alice", "Bob", "Carla"],
+  "blocks": ["07:00", "09:00", "11:00"],
+  "stations": ["intake", "packing"],
+  "station_holders": ["Alice", "Carla"],
+  "constraints": [
+    {"type": "fixed_block", "person": "Alice", "block": "07:00", "source_line": 2, "source": "Alice works at 07:00."},
+    {"type": "immediately_after", "person": "Bob", "other_person": "Alice", "source_line": 3, "source": "Bob works immediately after Alice."},
+    {"type": "not_block", "person": "Bob", "block": "09:00", "source_line": 4, "source": "Bob does not work at 09:00."},
+    {"type": "fixed_station", "person": "Alice", "station": "intake", "source_line": 5, "source": "Alice is assigned to intake."}
+  ]
+}

@@ -1,0 +1,5 @@
+Staff: Alice, Bob, Carla. Blocks: 07:00, 09:00, 11:00, one person each. Station holders: Alice, Carla. Stations: intake, packing, one person each.
+Alice works at 07:00.
+Bob works immediately after Alice.
+Bob does not work at 09:00.
+Alice is assigned to intake.
