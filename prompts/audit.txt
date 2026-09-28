@@ -5,13 +5,22 @@ only JSON of this shape:
 Each edit replaces ALL extracted constraints for exactly one numbered source
 line. Use an empty constraints list to remove a false constraint or mark a line
 as irrelevant. For a missed constraint, add a nonempty list. Omit lines that are
-already correct. Every constraint must use the same schema as the extraction:
-type, exact person/block/station fields, source_line, and a source that copies
-the entire original line verbatim. Multiple constraints from one line share
-its full exact source and number. Do not change the header in this response.
+already correct. Each rule needs type, typed entity fields, source_line, and a
+source that is an exact contiguous excerpt of the same numbered original line.
+It may omit a leading hedge or restatement prefix; do not paraphrase. Do not
+change the header in this response. Never edit the header line (line 1).
 
-Check every line, including those previously marked ignored and those without
-an extracted rule. Check negations, ordering direction, immediate versus merely
-earlier/later, betweenness, stations, and hedged statements. Hedges carry full
-force. A contradiction may be real: do not change rules just to make the notes
-solvable. If there are no corrections, return {"edits": []}. No explanations.
+Supported rule types: fixed_block/not_block (person,block),
+fixed_station/not_station (person,station), before/after/immediately_before/
+immediately_after/adjacent/not_adjacent (person,other_person), between
+(person,other_person,third_person), station_before_person/station_after_person
+(station,person). In station-person ordering, person can be any rota member;
+the station holder is resolved by the solver. Never put a station, time, or
+"whoever has..." phrase in a person field.
+
+Check every non-header line, including those previously marked ignored. Check
+negations, ordering direction, immediate versus merely earlier/later,
+betweenness, station-person ordering, and hedged statements. "X immediately
+before Y" means person=X, other_person=Y. Hedges carry full force. A
+contradiction may be real: do not change rules just to make the notes solvable.
+If there are no corrections, return {"edits": []}. No explanations.

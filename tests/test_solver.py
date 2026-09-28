@@ -112,7 +112,13 @@ class SolverTests(unittest.TestCase):
             ("adjacent", {"other_person": "B"}, lambda p, s: abs(p["A"] - p["B"]) == 1),
             ("not_adjacent", {"other_person": "B"}, lambda p, s: abs(p["A"] - p["B"]) != 1),
             ("between", {"other_person": "B", "third_person": "C"},
-             lambda p, s: min(p["B"], p["C"]) < p["A"] < max(p["B"], p["C"]))]
+             lambda p, s: min(p["B"], p["C"]) < p["A"] < max(p["B"], p["C"])),
+            ("station_before_person", {"station": "packing"},
+             lambda p, s: p[next(holder for holder, station in s.items()
+                                if station == "packing")] < p["A"]),
+            ("station_after_person", {"station": "packing"},
+             lambda p, s: p[next(holder for holder, station in s.items()
+                                if station == "packing")] > p["A"])]
         for kind, fields, predicate in cases:
             with self.subTest(kind=kind):
                 data = copy.deepcopy(base)

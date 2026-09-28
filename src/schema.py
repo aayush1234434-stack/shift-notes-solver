@@ -9,6 +9,8 @@ RELATION_FIELDS = {
         "before", "after", "immediately_before", "immediately_after",
         "adjacent", "not_adjacent")},
     "between": ("person", "other_person", "third_person"),
+    "station_before_person": ("station", "person"),
+    "station_after_person": ("station", "person"),
 }
 
 
@@ -85,7 +87,7 @@ def parse_problem(data: dict, raw_text: str | None = None) -> Problem:
             group = "blocks" if field == "block" else "stations" if field == "station" else "people"
             if not isinstance(value[field], str) or value[field] not in groups[group]:
                 raise SchemaError(f"Constraint {index} refers to an unknown {field}")
-        if "station" in value and value["person"] not in groups["station_holders"]:
+        if kind in {"fixed_station", "not_station"} and value["person"] not in groups["station_holders"]:
             raise SchemaError("Station constraints must refer to a station holder")
         number, source = value["source_line"], value["source"]
         if type(number) is not int or number < 1:

@@ -10,12 +10,12 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .extractor import build_messages, decode_extraction
+from .extractor import build_messages, decode_extraction, header_from_item
 from .higher_budget import (audit_messages, batch_messages, batches_for_item,
                             decode_audit, decode_batch, numbered_lines)
 from .model_client import BUDGETS, GraniteClient, MODEL, ModelConfig, ModelRequestError
 from .output_writer import atomic_json, validate_answer, write_answers
-from .schema import SchemaError
+from .schema import SchemaError, parse_problem
 from .solver import ExtractionIncompleteError, ScheduleSolver, SolverError
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -109,13 +109,22 @@ def solve_item(item: dict, client: GraniteClient, record: dict, records: list,
         atomic_json(run_dir / "call_counts.json", client.call_counts)
         return response
 
+    def optional_call(kind: str, messages: list[dict[str, str]]) -> str | None:
+        """Use a higher-budget slot without discarding an earlier extraction on failure."""
+        try:
+            return call(kind, messages)
+        except ModelRequestError as exc:
+            issues.append(str(exc))
+            return None
+
     messages = build_messages(item, prompt_examples)
     record["messages"] = messages
     response = call("full_extraction", messages)
     record["response"] = response
     problem = None
     try:
-        problem = decode_extraction(response, item, source_validation)
+        problem = decode_extraction(response, item, source_validation,
+                                    salvage=True, diagnostics=issues)
     except SchemaError as exc:
         issues.append(f"Initial extraction invalid: {exc}")
 
@@ -123,14 +132,42 @@ def solve_item(item: dict, client: GraniteClient, record: dict, records: list,
         answer, status, error = (answer_from_problem(problem, minimal_conflict_search)
                                  if problem else answer_from_response(
                                      response, item, source_validation, minimal_conflict_search))
-        return answer, status, error
+        return answer, status, "; ".join(filter(None, [*issues, error])) or None
 
-    # When the header or schema is invalid, a full replacement is needed before
-    # line-focused calls can be validated. Never derive a header from the key.
-    while problem is None and len(record["attempts"]) < min(cap, 3):
-        replacement = call("full_reextract", build_messages(item, prompt_examples))
+    if problem is None and ablate != "sentence_decomposition":
+        # An invalid page extraction no longer consumes the whole 10x budget
+        # on repeated page-sized attempts. The header is parsed from the notes,
+        # so independent line batches can be validated and merged from scratch.
+        header = header_from_item(item)
+        problem = parse_problem({**header, "constraints": [], "ignored_lines": []}, item["text"])
+        batch_count = cap - len(record["attempts"]) - (1 if budget == "10x" else 0)
+        for target in batches_for_item(item, batch_count):
+            raw = optional_call("bootstrap_batch", batch_messages(item, problem, target))
+            if raw is None:
+                continue
+            try:
+                problem = decode_batch(raw, item, problem, target, source_validation,
+                                       salvage=True, diagnostics=issues)
+            except SchemaError as exc:
+                issues.append(f"Bootstrap batch {target} rejected: {exc}")
+        if budget == "10x" and len(record["attempts"]) < cap:
+            raw = optional_call("bootstrap_audit", audit_messages(item, problem))
+            if raw is not None:
+                try:
+                    problem, _ = decode_audit(raw, item, problem, source_validation,
+                                              salvage=True, diagnostics=issues)
+                except SchemaError as exc:
+                    issues.append(f"Bootstrap audit rejected: {exc}")
+        answer, status, error = answer_from_problem(problem, minimal_conflict_search)
+        return answer, status, "; ".join(filter(None, [*issues, error])) or None
+
+    while problem is None and len(record["attempts"]) < cap:
+        replacement = optional_call("full_reextract", build_messages(item, prompt_examples))
+        if replacement is None:
+            continue
         try:
-            problem = decode_extraction(replacement, item, source_validation)
+            problem = decode_extraction(replacement, item, source_validation,
+                                        salvage=True, diagnostics=issues)
         except SchemaError as exc:
             issues.append(f"Full re-extraction invalid: {exc}")
     if problem is None:
@@ -140,11 +177,13 @@ def solve_item(item: dict, client: GraniteClient, record: dict, records: list,
     # solution count alone cannot expose a plausible but incorrect rule.
     changed_lines = []
     if ablate != "extraction_review" and len(record["attempts"]) < cap:
-        raw = call("source_audit", audit_messages(item, problem))
-        try:
-            problem, changed_lines = decode_audit(raw, item, problem, source_validation)
-        except SchemaError as exc:
-            issues.append(f"Audit rejected: {exc}")
+        raw = optional_call("source_audit", audit_messages(item, problem))
+        if raw is not None:
+            try:
+                problem, changed_lines = decode_audit(raw, item, problem, source_validation,
+                                                      salvage=True, diagnostics=issues)
+            except SchemaError as exc:
+                issues.append(f"Audit rejected: {exc}")
 
     if budget == "3x" and ablate != "sentence_decomposition" and len(record["attempts"]) < cap:
         target = changed_lines
@@ -153,20 +192,24 @@ def solve_item(item: dict, client: GraniteClient, record: dict, records: list,
             # one-call batch. Genuine contradictions are allowed to remain.
             target = list(range(2, len(numbered_lines(item)) + 1))
         if target:
-            raw = call("focused_reextract", batch_messages(item, problem, target))
-            try:
-                problem = decode_batch(raw, item, problem, target, source_validation)
-            except SchemaError as exc:
-                issues.append(f"Focused batch rejected: {exc}")
+            raw = optional_call("focused_reextract", batch_messages(item, problem, target))
+            if raw is not None:
+                try:
+                    problem = decode_batch(raw, item, problem, target, source_validation,
+                                           salvage=True, diagnostics=issues)
+                except SchemaError as exc:
+                    issues.append(f"Focused batch rejected: {exc}")
 
     if budget == "10x" and ablate != "sentence_decomposition":
         remaining = cap - len(record["attempts"])
         for target in batches_for_item(item, remaining):
-            raw = call("small_batch_reextract", batch_messages(item, problem, target))
-            try:
-                problem = decode_batch(raw, item, problem, target, source_validation)
-            except SchemaError as exc:
-                issues.append(f"Batch {target} rejected: {exc}")
+            raw = optional_call("small_batch_reextract", batch_messages(item, problem, target))
+            if raw is not None:
+                try:
+                    problem = decode_batch(raw, item, problem, target, source_validation,
+                                           salvage=True, diagnostics=issues)
+                except SchemaError as exc:
+                    issues.append(f"Batch {target} rejected: {exc}")
 
     answer, status, error = answer_from_problem(problem, minimal_conflict_search)
     combined = "; ".join(filter(None, [*issues, error])) or None

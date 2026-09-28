@@ -34,6 +34,13 @@ class CompiledProblem:
 def compile_rule(rule: Constraint, blocks: dict, stations: dict, problem: Problem):
     a = blocks[rule.person]
     kind = rule.type
+    if kind in {"station_before_person", "station_after_person"}:
+        station_index = problem.stations.index(rule.station)
+        holder_block = z3.Sum([
+            z3.If(stations[holder] == station_index, blocks[holder], 0)
+            for holder in problem.station_holders
+        ])
+        return holder_block < a if kind == "station_before_person" else holder_block > a
     if kind == "fixed_block":
         return a == problem.blocks.index(rule.block)
     if kind == "not_block":

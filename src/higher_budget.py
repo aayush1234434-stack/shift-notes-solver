@@ -77,18 +77,24 @@ def _validate_edits(item: dict, edits, allowed_lines: set[int],
             raise SchemaError("Edit has a duplicate or out-of-scope source line")
         if not isinstance(edit["constraints"], list):
             raise SchemaError("Edit constraints must be a list")
+        rules = []
         for rule in edit["constraints"]:
             if not isinstance(rule, dict) or rule.get("source_line") != number or (
-                source_validation and rule.get("source") != original[number - 1]
+                source_validation and (
+                    not isinstance(rule.get("source"), str)
+                    or rule["source"] not in original[number - 1]
+                )
             ):
-                raise SchemaError("Edited constraint must quote its exact numbered source")
+                raise SchemaError("Edited constraint must cite its numbered source")
+            rules.append({**rule, "source": original[number - 1]} if source_validation else rule)
         seen.add(number)
-        validated.append(edit)
+        validated.append({"source_line": number, "constraints": rules})
     return validated
 
 
 def apply_edits(item: dict, problem: Problem, edits: list[dict],
-                source_validation: bool = True) -> Problem:
+                source_validation: bool = True, salvage: bool = False,
+                diagnostics: list[str] | None = None) -> Problem:
     allowed = set(range(2, len(numbered_lines(item)) + 1))
     edits = _validate_edits(item, edits, allowed, source_validation)
     data = problem_data(problem)
@@ -101,21 +107,25 @@ def apply_edits(item: dict, problem: Problem, edits: list[dict],
             ignored.add(edit["source_line"])
     data["ignored_lines"] = sorted(ignored)
     return decode_extraction(json.dumps(data, ensure_ascii=False), item,
-                             source_validation=source_validation)
+                             source_validation=source_validation,
+                             salvage=salvage, diagnostics=diagnostics)
 
 
 def decode_audit(raw: str, item: dict, problem: Problem,
-                 source_validation: bool = True) -> tuple[Problem, list[int]]:
+                 source_validation: bool = True, salvage: bool = False,
+                 diagnostics: list[str] | None = None) -> tuple[Problem, list[int]]:
     data = _parse_json(raw)
     if not isinstance(data, dict) or set(data) != {"edits"}:
         raise SchemaError("Audit response needs only an edits array")
     edits = _validate_edits(item, data["edits"],
                             set(range(2, len(numbered_lines(item)) + 1)), source_validation)
-    return apply_edits(item, problem, edits, source_validation), [edit["source_line"] for edit in edits]
+    return (apply_edits(item, problem, edits, source_validation, salvage, diagnostics),
+            [edit["source_line"] for edit in edits])
 
 
 def decode_batch(raw: str, item: dict, problem: Problem, line_numbers: list[int],
-                 source_validation: bool = True) -> Problem:
+                 source_validation: bool = True, salvage: bool = False,
+                 diagnostics: list[str] | None = None) -> Problem:
     data = _parse_json(raw)
     if not isinstance(data, dict) or set(data) != {"constraints", "ignored_lines"}:
         raise SchemaError("Batch response needs constraints and ignored_lines")
@@ -130,18 +140,26 @@ def decode_batch(raw: str, item: dict, problem: Problem, line_numbers: list[int]
     original = numbered_lines(item)
     for rule in rules:
         if not isinstance(rule, dict) or type(rule.get("source_line")) is not int:
+            if salvage:
+                if diagnostics is not None:
+                    diagnostics.append("Dropped batch rule with invalid source_line")
+                continue
             raise SchemaError("Invalid batch constraint")
         number = rule["source_line"]
-        if number not in allowed or (source_validation and rule.get("source") != original[number - 1]):
+        if number not in allowed or (source_validation and (
+            not isinstance(rule.get("source"), str)
+            or rule["source"] not in original[number - 1]
+        )):
+            if salvage:
+                if diagnostics is not None:
+                    diagnostics.append(f"Dropped batch rule without requested-line evidence: {number}")
+                continue
             raise SchemaError("Batch constraint must quote a requested line")
-        grouped[number].append(rule)
-    if set(grouped) != set(ignored) | {number for number, values in grouped.items() if values}:
-        raise SchemaError("Batch must account for every requested line")
-    if set(ignored) & {number for number, values in grouped.items() if values}:
-        raise SchemaError("A line cannot be both ignored and extracted")
+        grouped[number].append({**rule, "source": original[number - 1]}
+                               if source_validation else rule)
     return apply_edits(item, problem, [
         {"source_line": number, "constraints": grouped[number]} for number in line_numbers
-    ], source_validation)
+    ], source_validation, salvage, diagnostics)
 
 
 def batches_for_item(item: dict, max_batches: int) -> list[list[int]]:

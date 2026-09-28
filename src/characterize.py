@@ -28,6 +28,8 @@ FIELDS = {
         "before", "after", "immediately_before", "immediately_after",
         "adjacent", "not_adjacent")},
     "between": ("person", "other_person", "third_person"),
+    "station_before_person": ("station", "person"),
+    "station_after_person": ("station", "person"),
 }
 REVIEW_TAGS = (
     "missed_constraint", "filler_as_constraint", "negation_error",

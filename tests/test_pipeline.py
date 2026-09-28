@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.extractor import decode_extraction
+from src.extractor import build_messages, decode_extraction, header_from_item
 from src.model_client import ModelRequestError
 from src.output_writer import validate_answer
 from src.pipeline import answer_from_response, run_pipeline, validate_items
@@ -59,6 +59,69 @@ class SequenceClient:
 
 
 class PipelineTests(unittest.TestCase):
+    def test_header_is_parsed_and_not_sent_as_a_line_to_extract(self):
+        item, _ = invented_item("unique")
+        self.assertEqual(header_from_item(item)["station_holders"], ["Alice", "Carla"])
+        message = build_messages(item)[1]["content"]
+        self.assertIn('"people": ["Alice", "Bob", "Carla"]', message)
+        self.assertIn("2: Alice works at 07:00.", message)
+        self.assertNotIn("1: Staff:", message)
+
+    def test_visible_format_header_keeps_intro_out_of_entity_lists(self):
+        item = {"text": "Shift notes, Bay 4. 3 staff on the rota: Alice, Bob, Carla. "
+                "Blocks run 07:00, 09:00, 11:00, one person per block, and each person "
+                "works exactly one block. There are 2 stations, one person on each: "
+                "intake, packing. The people on a station are Alice, Carla; the rest "
+                "are on no station.\n\nAlice works at 07:00.",
+                "n_staff": 3, "n_stations": 2}
+        self.assertEqual(header_from_item(item), {
+            "people": ["Alice", "Bob", "Carla"],
+            "blocks": ["07:00", "09:00", "11:00"],
+            "stations": ["intake", "packing"],
+            "station_holders": ["Alice", "Carla"]})
+
+    def test_short_exact_evidence_is_canonicalized_and_overlap_is_reconciled(self):
+        item, data = invented_item("unique")
+        rule = copy.deepcopy(data["constraints"][0])
+        rule["source"] = "Alice works at 07:00"
+        response = {"constraints": [rule], "ignored_lines": [2, 3, 4]}
+        problem = decode_extraction(json.dumps(response), item)
+        self.assertEqual(problem.constraints[0].source, "Alice works at 07:00.")
+        self.assertEqual(problem.ignored_lines, (3, 4))
+
+    def test_salvage_repairs_explicit_order_and_discards_unsupported_rules(self):
+        item = {"text": (
+            "Shift notes, Bay 4. 3 staff on the rota: Alice, Bob, Carla. "
+            "Blocks run 07:00, 09:00, 11:00, one person per block, and each person "
+            "works exactly one block. There are 2 stations, one person on each: "
+            "intake, packing. The people on a station are Alice, Bob; the rest are "
+            "on no station.\n\n"
+            "Alice is on the block immediately before Bob.\n"
+            "Carla works later than whoever has intake.\n"
+            "Last month Alice was on packing.\n"
+            "There is no block between Alice's and Bob's, in that order.\n"
+            "The printer has been moved."), "n_staff": 3, "n_stations": 2}
+        raw = {"constraints": [
+            {"type": "immediately_before", "person": "Bob", "other_person": "Alice",
+             "source_line": 2, "source": "Alice is on the block immediately before Bob."},
+            {"type": "before", "person": "Carla", "other_person": "whoever has intake",
+             "source_line": 3, "source": "Carla works later than whoever has intake."},
+            {"type": "fixed_station", "person": "Alice", "station": "packing",
+             "source_line": 4, "source": "Last month Alice was on packing."},
+            {"type": "not_between", "person": "Bob", "other_person": "Alice",
+             "source_line": 5, "source": "There is no block between Alice's and Bob's, in that order."},
+            {"type": "fixed_block", "person": "Carla", "block": "07:00",
+             "source_line": 6, "source": "The printer has been moved."}]}
+        issues = []
+        problem = decode_extraction(json.dumps(raw), item, salvage=True, diagnostics=issues)
+        self.assertEqual([(rule.source_line, rule.type, rule.person, rule.other_person,
+                           rule.station) for rule in problem.constraints], [
+            (2, "immediately_before", "Alice", "Bob", None),
+            (3, "station_before_person", "Carla", None, "intake"),
+            (5, "immediately_before", "Alice", "Bob", None)])
+        self.assertEqual(problem.ignored_lines, (4, 6))
+        self.assertEqual(len(issues), 2)
+
     def test_complete_run_one_call_each_and_expected_cases(self):
         items, responses = [], {}
         for case in ("unique", "ambiguous", "inconsistent"):
@@ -177,12 +240,18 @@ class PipelineTests(unittest.TestCase):
 
     def test_three_budget_recovers_invalid_first_extraction(self):
         item, data = invented_item("unique")
-        client = SequenceClient("3x", ["not JSON", json.dumps(data), '{"edits": []}'])
+        first_batch = {"constraints": [data["constraints"][0], data["constraints"][2]],
+                       "ignored_lines": []}
+        second_batch = {"constraints": [data["constraints"][1]], "ignored_lines": []}
+        client = SequenceClient("3x", ["not JSON", json.dumps(first_batch),
+                                        json.dumps(second_batch)])
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "answer.json"
             run_pipeline([item], client, Path(directory) / "run", output)
             self.assertEqual(json.loads(output.read_text())[item["id"]]["case"], "unique")
         self.assertEqual(client.call_counts[item["id"]], 3)
+        self.assertTrue(all(prompt[0]["content"].startswith("Extract scheduling rules from")
+                            for prompt in client.prompts[1:]))
 
     def test_rejected_audit_cannot_inject_unsupported_source(self):
         item, data = invented_item("unique")
