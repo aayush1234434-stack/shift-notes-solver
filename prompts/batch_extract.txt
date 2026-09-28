@@ -1,0 +1,20 @@
+Extract scheduling rules from ONLY the supplied numbered lines. The header
+lists are supplied separately as context. Return only JSON:
+{"constraints": [<complete typed constraint objects>],
+ "ignored_lines": [<numbers for irrelevant lines>]}
+
+Account for every supplied line exactly once: either with one or more complete
+constraints, or in ignored_lines. Copy every constraint source verbatim from
+its full original line and use its supplied source_line number. Multiple rules
+from one line must share the full source and number. Use only people, blocks and
+stations from the header lists. Keep all exact spellings.
+
+Supported types and required entity fields:
+- fixed_block / not_block: person, block
+- fixed_station / not_station: person, station
+- before / after / immediately_before / immediately_after / adjacent /
+  not_adjacent: person, other_person
+- between: person, other_person, third_person
+
+Hedges carry full force. Social details, hypothetical wishes, and uncertainty
+without a definite scheduling claim are irrelevant. Return no explanations.

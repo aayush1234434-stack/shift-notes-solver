@@ -37,6 +37,27 @@ class FakeClient:
         assert self.call_counts == {item_id: 1 for item_id in item_ids}
 
 
+class SequenceClient:
+    """Budget-aware fake that supplies one response per distinct model call."""
+    def __init__(self, budget, responses):
+        self.budget = budget
+        self.responses = iter(responses)
+        self.call_counts = {}
+        self.prompts = []
+
+    def complete(self, item_id, messages):
+        self.call_counts[item_id] = self.call_counts.get(item_id, 0) + 1
+        assert self.call_counts[item_id] <= {"1x": 1, "3x": 3, "10x": 10}[self.budget]
+        self.prompts.append(messages)
+        response = next(self.responses)
+        return response(messages) if callable(response) else response
+
+    def assert_budget_compliance(self, item_ids):
+        assert set(self.call_counts) == set(item_ids)
+        assert all(1 <= self.call_counts[item_id] <= {"1x": 1, "3x": 3, "10x": 10}[self.budget]
+                   for item_id in item_ids)
+
+
 class PipelineTests(unittest.TestCase):
     def test_complete_run_one_call_each_and_expected_cases(self):
         items, responses = [], {}
@@ -127,6 +148,81 @@ class PipelineTests(unittest.TestCase):
         item, _ = invented_item("unique")
         with self.assertRaises(ValueError):
             validate_items([item, item])
+
+    def test_three_budget_audit_repairs_plausible_wrong_solution(self):
+        item, correct = invented_item("unique")
+        wrong = copy.deepcopy(correct)
+        wrong["constraints"][1]["type"] = "before"
+        repair = correct["constraints"][1]
+        audit = {"edits": [{"source_line": 3, "constraints": [repair]}]}
+        focused = {"constraints": [repair], "ignored_lines": []}
+        client = SequenceClient("3x", [json.dumps(wrong), json.dumps(audit), json.dumps(focused)])
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir, output = Path(directory) / "run", Path(directory) / "answers.json"
+            run_pipeline([item], client, run_dir, output)
+            answer = json.loads(output.read_text())[item["id"]]
+            self.assertEqual(answer["case"], "unique")
+            self.assertEqual(answer["assignment"]["Carla"]["block"], "11:00")
+            self.assertEqual(client.call_counts[item["id"]], 3)
+            records = json.loads((run_dir / "records.json").read_text())
+            self.assertEqual([a["kind"] for a in records[0]["attempts"]],
+                             ["full_extraction", "source_audit", "focused_reextract"])
+
+    def test_three_budget_audits_even_when_initial_count_is_valid(self):
+        item, data = invented_item("unique")
+        client = SequenceClient("3x", [json.dumps(data), '{"edits": []}'])
+        with tempfile.TemporaryDirectory() as directory:
+            run_pipeline([item], client, Path(directory) / "run", Path(directory) / "answer.json")
+        self.assertEqual(client.call_counts[item["id"]], 2)
+
+    def test_three_budget_recovers_invalid_first_extraction(self):
+        item, data = invented_item("unique")
+        client = SequenceClient("3x", ["not JSON", json.dumps(data), '{"edits": []}'])
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "answer.json"
+            run_pipeline([item], client, Path(directory) / "run", output)
+            self.assertEqual(json.loads(output.read_text())[item["id"]]["case"], "unique")
+        self.assertEqual(client.call_counts[item["id"]], 3)
+
+    def test_rejected_audit_cannot_inject_unsupported_source(self):
+        item, data = invented_item("unique")
+        broken = {"edits": [{"source_line": 3, "constraints": [
+            {**data["constraints"][1], "source": "invented"}]}]}
+        client = SequenceClient("3x", [json.dumps(data), json.dumps(broken)])
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir, output = Path(directory) / "run", Path(directory) / "answer.json"
+            run_pipeline([item], client, run_dir, output)
+            self.assertEqual(json.loads(output.read_text())[item["id"]]["case"], "unique")
+            record = json.loads((run_dir / "records.json").read_text())[0]
+            self.assertIn("Audit rejected", record["error"])
+        self.assertEqual(client.call_counts[item["id"]], 2)
+
+    def test_ten_budget_small_batches_cover_all_lines_within_cap(self):
+        item, correct = invented_item("unique")
+        filler = [f"The break room has notice number {n}." for n in range(17)]
+        item["text"] += "\n".join(filler) + "\n"
+        wrong = copy.deepcopy(correct)
+        wrong["constraints"] = []
+        wrong["ignored_lines"] = list(range(2, 22))
+        by_line = {rule["source_line"]: rule for rule in correct["constraints"]}
+
+        def respond_batch(messages):
+            selected = messages[1]["content"].split("Lines to extract:\n", 1)[1]
+            numbers = [int(line.split(":", 1)[0]) for line in selected.splitlines()]
+            return json.dumps({"constraints": [by_line[n] for n in numbers if n in by_line],
+                               "ignored_lines": [n for n in numbers if n not in by_line]})
+
+        responses = [json.dumps(wrong), '{"edits": []}'] + [respond_batch] * 8
+        client = SequenceClient("10x", responses)
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir, output = Path(directory) / "run", Path(directory) / "answer.json"
+            run_pipeline([item], client, run_dir, output)
+            answer = json.loads(output.read_text())[item["id"]]
+            self.assertEqual(answer["case"], "unique")
+            self.assertEqual(answer["assignment"]["Bob"]["block"], "09:00")
+            self.assertEqual(client.call_counts[item["id"]], 10)
+            records = json.loads((run_dir / "records.json").read_text())
+            self.assertEqual(len(records[0]["attempts"]), 10)
 
 
 if __name__ == "__main__":
