@@ -19,6 +19,8 @@ from .schema import SchemaError
 from .solver import ExtractionIncompleteError, ScheduleSolver, SolverError
 
 ROOT = Path(__file__).resolve().parents[1]
+ABLATIONS = ("prompt_examples", "source_validation", "extraction_review",
+             "sentence_decomposition", "minimal_conflict_search")
 
 
 def validate_items(items) -> None:
@@ -43,9 +45,11 @@ def validate_items(items) -> None:
         raise ValueError("Duplicate item IDs")
 
 
-def answer_from_problem(problem) -> tuple[dict, str, str | None]:
+def answer_from_problem(problem, minimal_conflict_search: bool = True) -> tuple[dict, str, str | None]:
     try:
         solver = ScheduleSolver(problem)
+        if not minimal_conflict_search and not solver.is_satisfiable():
+            return {"case": "inconsistent", "conflicts": []}, "core_search_ablated", None
         try:
             answer = solver.result()
         except ExtractionIncompleteError as exc:
@@ -63,9 +67,11 @@ def answer_from_problem(problem) -> tuple[dict, str, str | None]:
         return {"case": "inconsistent", "conflicts": []}, "unresolved", str(exc)
 
 
-def answer_from_response(response: str, item: dict) -> tuple[dict, str, str | None]:
+def answer_from_response(response: str, item: dict, source_validation: bool = True,
+                         minimal_conflict_search: bool = True) -> tuple[dict, str, str | None]:
     try:
-        return answer_from_problem(decode_extraction(response, item))
+        return answer_from_problem(decode_extraction(response, item, source_validation),
+                                   minimal_conflict_search)
     except SchemaError as exc:
         return {"case": "inconsistent", "conflicts": []}, "unresolved", str(exc)
 
@@ -75,11 +81,14 @@ def solve_count(problem) -> int:
 
 
 def solve_item(item: dict, client: GraniteClient, record: dict, records: list,
-               run_dir: Path, budget: str) -> tuple[dict, str, str | None]:
+               run_dir: Path, budget: str, ablate: str | None = None) -> tuple[dict, str, str | None]:
     """Make 1..budget model calls; every accepted edit is fully revalidated."""
     item_id = item["id"]
     cap = BUDGETS[budget]
     issues = []
+    source_validation = ablate != "source_validation"
+    prompt_examples = ablate != "prompt_examples"
+    minimal_conflict_search = ablate != "minimal_conflict_search"
 
     def call(kind: str, messages: list[dict[str, str]]) -> str:
         if len(record["attempts"]) >= cap:
@@ -100,26 +109,28 @@ def solve_item(item: dict, client: GraniteClient, record: dict, records: list,
         atomic_json(run_dir / "call_counts.json", client.call_counts)
         return response
 
-    messages = build_messages(item)
+    messages = build_messages(item, prompt_examples)
     record["messages"] = messages
     response = call("full_extraction", messages)
     record["response"] = response
     problem = None
     try:
-        problem = decode_extraction(response, item)
+        problem = decode_extraction(response, item, source_validation)
     except SchemaError as exc:
         issues.append(f"Initial extraction invalid: {exc}")
 
     if budget == "1x":
-        answer, status, error = answer_from_problem(problem) if problem else answer_from_response(response, item)
+        answer, status, error = (answer_from_problem(problem, minimal_conflict_search)
+                                 if problem else answer_from_response(
+                                     response, item, source_validation, minimal_conflict_search))
         return answer, status, error
 
     # When the header or schema is invalid, a full replacement is needed before
     # line-focused calls can be validated. Never derive a header from the key.
     while problem is None and len(record["attempts"]) < min(cap, 3):
-        replacement = call("full_reextract", build_messages(item))
+        replacement = call("full_reextract", build_messages(item, prompt_examples))
         try:
-            problem = decode_extraction(replacement, item)
+            problem = decode_extraction(replacement, item, source_validation)
         except SchemaError as exc:
             issues.append(f"Full re-extraction invalid: {exc}")
     if problem is None:
@@ -128,14 +139,14 @@ def solve_item(item: dict, client: GraniteClient, record: dict, records: list,
     # Audit every valid first pass, even if it yields 1..4 solutions: the
     # solution count alone cannot expose a plausible but incorrect rule.
     changed_lines = []
-    if len(record["attempts"]) < cap:
+    if ablate != "extraction_review" and len(record["attempts"]) < cap:
         raw = call("source_audit", audit_messages(item, problem))
         try:
-            problem, changed_lines = decode_audit(raw, item, problem)
+            problem, changed_lines = decode_audit(raw, item, problem, source_validation)
         except SchemaError as exc:
             issues.append(f"Audit rejected: {exc}")
 
-    if budget == "3x" and len(record["attempts"]) < cap:
+    if budget == "3x" and ablate != "sentence_decomposition" and len(record["attempts"]) < cap:
         target = changed_lines
         if not target and solve_count(problem) not in {1, 2, 3, 4}:
             # Anomalous count: re-extract the non-header lines as a focused
@@ -144,30 +155,32 @@ def solve_item(item: dict, client: GraniteClient, record: dict, records: list,
         if target:
             raw = call("focused_reextract", batch_messages(item, problem, target))
             try:
-                problem = decode_batch(raw, item, problem, target)
+                problem = decode_batch(raw, item, problem, target, source_validation)
             except SchemaError as exc:
                 issues.append(f"Focused batch rejected: {exc}")
 
-    if budget == "10x":
+    if budget == "10x" and ablate != "sentence_decomposition":
         remaining = cap - len(record["attempts"])
         for target in batches_for_item(item, remaining):
             raw = call("small_batch_reextract", batch_messages(item, problem, target))
             try:
-                problem = decode_batch(raw, item, problem, target)
+                problem = decode_batch(raw, item, problem, target, source_validation)
             except SchemaError as exc:
                 issues.append(f"Batch {target} rejected: {exc}")
 
-    answer, status, error = answer_from_problem(problem)
+    answer, status, error = answer_from_problem(problem, minimal_conflict_search)
     combined = "; ".join(filter(None, [*issues, error])) or None
     return answer, status, combined
 
 
 def run_pipeline(items: list[dict], client: GraniteClient, run_dir: Path, output: Path,
-                 budget: str | None = None) -> dict:
+                 budget: str | None = None, ablate: str | None = None) -> dict:
     validate_items(items)
     budget = budget or getattr(client, "budget", "1x")
     if budget not in BUDGETS:
         raise ValueError(f"Unsupported budget: {budget}")
+    if ablate is not None and ablate not in ABLATIONS:
+        raise ValueError(f"Unsupported ablation: {ablate}")
     answers = {}
     records = []
     for position, item in enumerate(items, 1):
@@ -175,7 +188,7 @@ def run_pipeline(items: list[dict], client: GraniteClient, run_dir: Path, output
                   "attempts": [], "status": "request_pending", "error": None, "answer": None}
         records.append(record)
         atomic_json(run_dir / "records.json", records)
-        answer, status, error = solve_item(item, client, record, records, run_dir, budget)
+        answer, status, error = solve_item(item, client, record, records, run_dir, budget, ablate)
         answers[item["id"]] = answer
         record.update(status=status, error=error, answer=answer)
         atomic_json(run_dir / "records.json", records)
@@ -193,6 +206,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("items", type=Path)
     parser.add_argument("--budget", required=True, choices=list(BUDGETS))
+    parser.add_argument("--ablate", choices=ABLATIONS,
+                        help="Disable one component for a reproducible ablation")
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--env-file", type=Path, default=ROOT / ".env")
     args = parser.parse_args()
@@ -212,13 +227,14 @@ def main() -> int:
         }
         atomic_json(run_dir / "manifest.json", {
             "created": datetime.now(timezone.utc).isoformat(), "budget": args.budget,
+            "ablate": args.ablate,
             "model": MODEL, "temperature": 1.0, "top_p": 0.95,
             "reasoning": {"enabled": False}, "items": len(items),
             "input_sha256": hashlib.sha256(args.items.read_bytes()).hexdigest(),
             "prompt_sha256": prompt_hashes,
             "output": str(args.out.resolve()), "item_ids": [item["id"] for item in items]})
         client = GraniteClient(config, args.budget, run_dir / "calls.jsonl")
-        summary = run_pipeline(items, client, run_dir, args.out, args.budget)
+        summary = run_pipeline(items, client, run_dir, args.out, args.budget, args.ablate)
         atomic_json(run_dir / "summary.json", {"status": "completed", **summary})
         print(f"Answers: {args.out}\nEvidence: {run_dir}")
         return 0

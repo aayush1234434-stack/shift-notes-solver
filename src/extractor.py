@@ -8,10 +8,15 @@ from .schema import SchemaError, parse_problem
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def build_messages(item: dict) -> list[dict[str, str]]:
+def build_messages(item: dict, prompt_examples: bool = True) -> list[dict[str, str]]:
     lines = [line for line in item["text"].splitlines() if line.strip()]
+    prompt = (ROOT / "prompts" / "extract.txt").read_text(encoding="utf-8")
+    if not prompt_examples:
+        start = prompt.index("Generic examples of language meanings")
+        end = prompt.index("Extract every definite constraint", start)
+        prompt = prompt[:start] + prompt[end:]
     return [
-        {"role": "system", "content": (ROOT / "prompts" / "extract.txt").read_text(encoding="utf-8")},
+        {"role": "system", "content": prompt},
         {"role": "user", "content": "\n".join(
             f"{number}: {line}" for number, line in enumerate(lines, 1))},
     ]
@@ -30,7 +35,7 @@ def _reject_constant(value):
     raise SchemaError(f"Invalid JSON constant: {value}")
 
 
-def decode_extraction(response: str, item: dict):
+def decode_extraction(response: str, item: dict, source_validation: bool = True):
     text = response.strip()
     # Deterministic envelope removal only; never rewrite extracted facts.
     if text.startswith("```json\n") and text.endswith("\n```"):
@@ -41,7 +46,7 @@ def decode_extraction(response: str, item: dict):
         data = json.loads(text, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
     except json.JSONDecodeError as exc:
         raise SchemaError(f"Malformed extraction JSON at character {exc.pos}") from None
-    problem = parse_problem(data, raw_text=item["text"])
+    problem = parse_problem(data, raw_text=item["text"] if source_validation else None)
     for name, values in (("people", problem.people), ("blocks", problem.blocks),
                          ("stations", problem.stations), ("station_holders", problem.station_holders)):
         if any(value not in item["text"] for value in values):
