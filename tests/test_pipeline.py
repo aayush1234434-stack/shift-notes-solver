@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from src.extractor import build_messages, decode_extraction, header_from_item
+from src.higher_budget import decode_batch
 from src.model_client import ModelRequestError
 from src.output_writer import validate_answer
 from src.pipeline import answer_from_response, run_pipeline, validate_items
@@ -80,14 +81,25 @@ class PipelineTests(unittest.TestCase):
             "stations": ["intake", "packing"],
             "station_holders": ["Alice", "Carla"]})
 
-    def test_short_exact_evidence_is_canonicalized_and_overlap_is_reconciled(self):
+    def test_short_exact_evidence_is_canonicalized_without_inferred_ignores(self):
         item, data = invented_item("unique")
         rule = copy.deepcopy(data["constraints"][0])
         rule["source"] = "Alice works at 07:00"
-        response = {"constraints": [rule], "ignored_lines": [2, 3, 4]}
+        response = {"constraints": [rule], "ignored_lines": [3, 4]}
         problem = decode_extraction(json.dumps(response), item)
         self.assertEqual(problem.constraints[0].source, "Alice works at 07:00.")
         self.assertEqual(problem.ignored_lines, (3, 4))
+
+    def test_missing_or_overlapping_line_is_rejected(self):
+        item, data = invented_item("unique")
+        missing = copy.deepcopy(data)
+        missing["constraints"] = missing["constraints"][:-1]
+        with self.assertRaisesRegex(SchemaError, "Unclassified note lines"):
+            decode_extraction(json.dumps(missing), item)
+        overlapping = copy.deepcopy(data)
+        overlapping["ignored_lines"] = [2]
+        with self.assertRaisesRegex(SchemaError, "both constrained and ignored"):
+            decode_extraction(json.dumps(overlapping), item)
 
     def test_salvage_repairs_explicit_order_and_discards_unsupported_rules(self):
         item = {"text": (
@@ -106,12 +118,9 @@ class PipelineTests(unittest.TestCase):
              "source_line": 2, "source": "Alice is on the block immediately before Bob."},
             {"type": "before", "person": "Carla", "other_person": "whoever has intake",
              "source_line": 3, "source": "Carla works later than whoever has intake."},
-            {"type": "fixed_station", "person": "Alice", "station": "packing",
-             "source_line": 4, "source": "Last month Alice was on packing."},
             {"type": "not_between", "person": "Bob", "other_person": "Alice",
-             "source_line": 5, "source": "There is no block between Alice's and Bob's, in that order."},
-            {"type": "fixed_block", "person": "Carla", "block": "07:00",
-             "source_line": 6, "source": "The printer has been moved."}]}
+             "source_line": 5, "source": "There is no block between Alice's and Bob's, in that order."}],
+            "ignored_lines": [4, 6]}
         issues = []
         problem = decode_extraction(json.dumps(raw), item, salvage=True, diagnostics=issues)
         self.assertEqual([(rule.source_line, rule.type, rule.person, rule.other_person,
@@ -120,7 +129,27 @@ class PipelineTests(unittest.TestCase):
             (3, "station_before_person", "Carla", None, "intake"),
             (5, "immediately_before", "Alice", "Bob", None)])
         self.assertEqual(problem.ignored_lines, (4, 6))
-        self.assertEqual(len(issues), 2)
+        self.assertEqual(len(issues), 0)
+
+    def test_salvaged_rule_does_not_turn_its_line_into_ignored(self):
+        item, data = invented_item("unique")
+        bad = copy.deepcopy(data)
+        bad["constraints"][0]["person"] = "Invented"
+        issues = []
+        with self.assertRaisesRegex(SchemaError, "No valid classification remains"):
+            decode_extraction(json.dumps(bad), item, salvage=True, diagnostics=issues)
+        self.assertEqual(len(issues), 1)
+
+    def test_batch_omission_and_invalid_salvaged_rule_are_rejected(self):
+        item, data = invented_item("unique")
+        problem = decode_extraction(json.dumps(data), item)
+        with self.assertRaisesRegex(SchemaError, "Unclassified batch lines"):
+            decode_batch('{"constraints": [], "ignored_lines": []}', item, problem, [2])
+        bad = copy.deepcopy(data["constraints"][0])
+        bad["person"] = "Invented"
+        with self.assertRaisesRegex(SchemaError, "No valid rule remains"):
+            decode_batch(json.dumps({"constraints": [bad], "ignored_lines": []}),
+                         item, problem, [2], salvage=True)
 
     def test_complete_run_one_call_each_and_expected_cases(self):
         items, responses = [], {}
@@ -164,6 +193,18 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(record["status"], "unresolved")
             self.assertEqual(client.call_counts[item["id"]], 1)
 
+    def test_missing_line_at_one_call_is_unresolved(self):
+        item, data = invented_item("unique")
+        data["constraints"] = data["constraints"][:-1]
+        client = FakeClient({item["id"]: json.dumps(data)})
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir, output = Path(directory) / "run", Path(directory) / "answers.json"
+            run_pipeline([item], client, run_dir, output)
+            record = json.loads((run_dir / "records.json").read_text())[0]
+            self.assertEqual(record["status"], "unresolved")
+            self.assertIn("Unclassified note lines", record["error"])
+            self.assertEqual(client.call_counts[item["id"]], 1)
+
     def test_endpoint_failure_stops_and_does_not_overwrite_output(self):
         first, data = invented_item("unique")
         second, _ = invented_item("ambiguous")
@@ -181,6 +222,7 @@ class PipelineTests(unittest.TestCase):
     def test_partial_policy_is_explicit_when_extraction_leaves_many_models(self):
         item, data = invented_item("unique")
         data["constraints"] = []
+        data["ignored_lines"] = [2, 3, 4]
         answer, status, error = answer_from_response(json.dumps(data), item)
         self.assertEqual(status, "partial_extraction")
         self.assertEqual(answer["case"], "ambiguous")

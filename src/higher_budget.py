@@ -6,7 +6,7 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
-from .extractor import _reject_constant, _unique_object, decode_extraction
+from .extractor import _reject_constant, _unique_object, decode_extraction, unclassified_lines
 from .schema import Problem, SchemaError
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -106,9 +106,15 @@ def apply_edits(item: dict, problem: Problem, edits: list[dict],
         if not edit["constraints"]:
             ignored.add(edit["source_line"])
     data["ignored_lines"] = sorted(ignored)
-    return decode_extraction(json.dumps(data, ensure_ascii=False), item,
-                             source_validation=source_validation,
-                             salvage=salvage, diagnostics=diagnostics)
+    updated = decode_extraction(json.dumps(data, ensure_ascii=False), item,
+                                source_validation=source_validation,
+                                salvage=salvage, diagnostics=diagnostics,
+                                require_complete=False)
+    expected_rules = {edit["source_line"] for edit in edits if edit["constraints"]}
+    surviving_rules = {rule.source_line for rule in updated.constraints}
+    if expected_rules - surviving_rules:
+        raise SchemaError(f"No valid rule remains for edited lines: {sorted(expected_rules - surviving_rules)}")
+    return updated
 
 
 def decode_audit(raw: str, item: dict, problem: Problem,
@@ -137,8 +143,12 @@ def decode_batch(raw: str, item: dict, problem: Problem, line_numbers: list[int]
     ) or len(ignored) != len(set(ignored)):
         raise SchemaError("Batch classifications must use unique requested lines")
     grouped = {number: [] for number in line_numbers}
+    cited = set()
+    raw_cited = set()
     original = numbered_lines(item)
     for rule in rules:
+        if isinstance(rule, dict) and type(rule.get("source_line")) is int:
+            raw_cited.add(rule["source_line"])
         if not isinstance(rule, dict) or type(rule.get("source_line")) is not int:
             if salvage:
                 if diagnostics is not None:
@@ -157,9 +167,18 @@ def decode_batch(raw: str, item: dict, problem: Problem, line_numbers: list[int]
             raise SchemaError("Batch constraint must quote a requested line")
         grouped[number].append({**rule, "source": original[number - 1]}
                                if source_validation else rule)
-    return apply_edits(item, problem, [
+        cited.add(number)
+    if raw_cited & set(ignored):
+        raise SchemaError(f"Batch lines both constrained and ignored: {sorted(raw_cited & set(ignored))}")
+    if allowed - cited - set(ignored):
+        raise SchemaError(f"Unclassified batch lines: {sorted(allowed - cited - set(ignored))}")
+    updated = apply_edits(item, problem, [
         {"source_line": number, "constraints": grouped[number]} for number in line_numbers
     ], source_validation, salvage, diagnostics)
+    missing = allowed & set(unclassified_lines(updated, item))
+    if missing:
+        raise SchemaError(f"No valid batch classification remains for lines: {sorted(missing)}")
+    return updated
 
 
 def batches_for_item(item: dict, max_batches: int) -> list[list[int]]:

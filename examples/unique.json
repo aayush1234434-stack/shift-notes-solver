@@ -3,6 +3,7 @@
   "blocks": ["07:00", "09:00", "11:00"],
   "stations": ["intake", "packing"],
   "station_holders": ["Alice", "Carla"],
+  "ignored_lines": [],
   "constraints": [
     {"type": "fixed_block", "person": "Alice", "block": "07:00", "source_line": 2, "source": "Alice works at 07:00."},
     {"type": "after", "person": "Carla", "other_person": "Bob", "source_line": 3, "source": "Carla starts after Bob."},

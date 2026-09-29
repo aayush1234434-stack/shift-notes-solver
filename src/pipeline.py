@@ -10,7 +10,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .extractor import build_messages, decode_extraction, header_from_item
+from .extractor import build_messages, decode_extraction, header_from_item, unclassified_lines
 from .higher_budget import (audit_messages, batch_messages, batches_for_item,
                             decode_audit, decode_batch, numbered_lines)
 from .model_client import BUDGETS, GraniteClient, MODEL, ModelConfig, ModelRequestError
@@ -158,6 +158,10 @@ def solve_item(item: dict, client: GraniteClient, record: dict, records: list,
                                               salvage=True, diagnostics=issues)
                 except SchemaError as exc:
                     issues.append(f"Bootstrap audit rejected: {exc}")
+        missing = unclassified_lines(problem, item)
+        if missing:
+            return ({"case": "inconsistent", "conflicts": []}, "unresolved",
+                    "; ".join([*issues, f"Unclassified note lines: {missing}"]))
         answer, status, error = answer_from_problem(problem, minimal_conflict_search)
         return answer, status, "; ".join(filter(None, [*issues, error])) or None
 
@@ -211,6 +215,10 @@ def solve_item(item: dict, client: GraniteClient, record: dict, records: list,
                 except SchemaError as exc:
                     issues.append(f"Batch {target} rejected: {exc}")
 
+    missing = unclassified_lines(problem, item)
+    if missing:
+        return ({"case": "inconsistent", "conflicts": []}, "unresolved",
+                "; ".join([*issues, f"Unclassified note lines: {missing}"]))
     answer, status, error = answer_from_problem(problem, minimal_conflict_search)
     combined = "; ".join(filter(None, [*issues, error])) or None
     return answer, status, combined

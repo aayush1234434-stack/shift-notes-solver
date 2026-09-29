@@ -138,7 +138,8 @@ def _reject_constant(value):
 
 
 def decode_extraction(response: str, item: dict, source_validation: bool = True,
-                      salvage: bool = False, diagnostics: list[str] | None = None):
+                      salvage: bool = False, diagnostics: list[str] | None = None,
+                      require_complete: bool = True):
     text = response.strip()
     # Deterministic envelope removal only; never rewrite extracted facts.
     if text.startswith("```json\n") and text.endswith("\n```"):
@@ -159,8 +160,24 @@ def decode_extraction(response: str, item: dict, source_validation: bool = True,
         data[name] = values
     if not isinstance(data.get("constraints"), list):
         raise SchemaError("constraints must be a list")
+    if not isinstance(data.get("ignored_lines"), list):
+        raise SchemaError("ignored_lines must be an explicit list")
+    lines = numbered_lines(item)
+    note_lines = set(range(2, len(lines) + 1))
+    ignored = data["ignored_lines"]
+    if (any(type(number) is not int or number not in note_lines for number in ignored)
+            or len(ignored) != len(set(ignored))):
+        raise SchemaError("ignored_lines must contain unique non-header line numbers")
+    cited = set()
+    for index, rule in enumerate(data["constraints"]):
+        if not isinstance(rule, dict) or type(rule.get("source_line")) is not int or rule["source_line"] not in note_lines:
+            raise SchemaError(f"Constraint {index} has an invalid non-header source_line")
+        cited.add(rule["source_line"])
+    if cited & set(ignored):
+        raise SchemaError(f"Lines both constrained and ignored: {sorted(cited & set(ignored))}")
+    if require_complete and note_lines - cited - set(ignored):
+        raise SchemaError(f"Unclassified note lines: {sorted(note_lines - cited - set(ignored))}")
     if source_validation:
-        lines = numbered_lines(item)
         constraints = []
         seen = set()
         for index, raw_rule in enumerate(data["constraints"]):
@@ -197,8 +214,9 @@ def decode_extraction(response: str, item: dict, source_validation: bool = True,
                 if diagnostics is not None:
                     diagnostics.append(f"Dropped model rule {index}: {exc}")
         data["constraints"] = constraints
-        cited = {rule["source_line"] for rule in constraints}
-        data["ignored_lines"] = sorted(set(range(2, len(lines) + 1)) - cited)
+    surviving = {rule["source_line"] for rule in data["constraints"]}
+    if require_complete and note_lines - surviving - set(ignored):
+        raise SchemaError(f"No valid classification remains for lines: {sorted(note_lines - surviving - set(ignored))}")
     problem = parse_problem(data, raw_text=item["text"] if source_validation else None)
     for name, values in (("people", problem.people), ("blocks", problem.blocks),
                          ("stations", problem.stations), ("station_holders", problem.station_holders)):
@@ -208,3 +226,9 @@ def decode_extraction(response: str, item: dict, source_validation: bool = True,
         if field in item and item[field] != actual:
             raise SchemaError(f"Extracted header disagrees with {field}")
     return problem
+
+
+def unclassified_lines(problem, item: dict) -> list[int]:
+    """Return note lines with neither an accepted rule nor an explicit ignore."""
+    classified = {rule.source_line for rule in problem.constraints} | set(problem.ignored_lines)
+    return sorted(set(range(2, len(numbered_lines(item)) + 1)) - classified)
