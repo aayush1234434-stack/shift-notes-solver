@@ -255,6 +255,16 @@ class PipelineTests(unittest.TestCase):
         item["text"] += "Alice and Bob car-share to the site.\n"
         menus = menus_for_item(item)
         self.assertEqual(menus[4], [])
+        nonholder = {"id": "NONHOLDER", "n_staff": 3, "n_stations": 2, "text":
+                     "Staff: Alice, Bob, Carla. Blocks: 07:00, 09:00, 11:00, one person each. "
+                     "Station holders: Alice, Carla. Stations: intake, packing, one person each.\n"
+                     "Bob mentioned intake during the walkaround.\n"
+                     "Bob starts after intake.\n"}
+        nonholder_menus = menus_for_item(nonholder)
+        self.assertEqual(nonholder_menus[2], [])
+        self.assertEqual(
+            [rule["type"] for option in nonholder_menus[3] for rule in option["rules"]],
+            ["station_before_person", "station_after_person"])
         accepted = FakeClient({item["id"]: selection_text(item)})
         dropped = FakeClient({item["id"]: selection_text(item, {2: "X"})})
         with tempfile.TemporaryDirectory() as directory:

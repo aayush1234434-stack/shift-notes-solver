@@ -107,9 +107,6 @@ def _generic_rules(line: str, header: dict) -> list[list[dict]]:
         person, station = people[0], stations[0]
         found.append([{"type": "fixed_station", "person": person, "station": station}])
         found.append([{"type": "not_station", "person": person, "station": station}])
-    elif len(stations) == 1 and len(people) == 1 and not blocks:
-        found.append([{"type": "station_before_person", "station": stations[0], "person": people[0]}])
-        found.append([{"type": "station_after_person", "station": stations[0], "person": people[0]}])
     elif (len(people) == 2 and not blocks and not stations
           and re.search(r"\b(?:before|after|earlier|later|between)\b", body, re.IGNORECASE)):
         first, second = people
