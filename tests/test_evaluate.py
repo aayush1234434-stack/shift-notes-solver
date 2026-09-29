@@ -43,7 +43,8 @@ class AblationTests(unittest.TestCase):
         for budget, ablation, expected in (("3x", "extraction_review", 1),
                                            ("10x", "sentence_decomposition", 2)):
             with self.subTest(ablation=ablation), tempfile.TemporaryDirectory() as directory:
-                responses = [json.dumps(data), '{"edits": []}']
+                from tests.test_pipeline import selection_text
+                responses = [selection_text(item), "no changes"]
                 client = SequenceClient(budget, responses)
                 out = Path(directory) / "answers.json"
                 run_pipeline([item], client, Path(directory) / "run", out, budget, ablation)

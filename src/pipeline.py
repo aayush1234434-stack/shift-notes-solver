@@ -11,13 +11,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from .answer_validation import AnswerValidationError, validate_answer_for_problem
-from .extractor import (build_messages, decode_extraction, header_from_item,
-                        note_line_numbers, unclassified_lines)
-from .higher_budget import (audit_messages, batch_messages, batches_for_item,
-                            decode_audit, decode_batch)
+from .extractor import build_messages, decode_extraction, model_cited_lines
+from .selection import (batch_messages, menus_for_item, parse_choices,
+                        problem_from_choices, review_messages, selected_lines)
 from .model_client import BUDGETS, GraniteClient, MODEL, ModelConfig, ModelRequestError
 from .output_writer import atomic_json, write_answers
-from .schema import SchemaError, parse_problem
+from .schema import SchemaError
 from .solver import ExtractionIncompleteError, ScheduleSolver, SolverError
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,13 +46,14 @@ def validate_items(items) -> None:
         raise ValueError("Duplicate item IDs")
 
 
-def answer_from_problem(problem, minimal_conflict_search: bool = True) -> tuple[dict, str, str | None]:
+def answer_from_problem(problem, minimal_conflict_search: bool = True,
+                        prefer_lines=None) -> tuple[dict, str, str | None]:
     try:
         solver = ScheduleSolver(problem)
         if not minimal_conflict_search and not solver.is_satisfiable():
             return {"case": "inconsistent", "conflicts": []}, "core_search_ablated", None
         try:
-            answer = solver.result()
+            answer = solver.result(prefer_lines)
         except ExtractionIncompleteError as exc:
             # No second call exists at 1x. Return a documented partial attempt
             # rather than inventing rules. All emitted schedules satisfy extraction.
@@ -73,7 +73,7 @@ def answer_from_response(response: str, item: dict, source_validation: bool = Tr
                          minimal_conflict_search: bool = True) -> tuple[dict, str, str | None]:
     try:
         return answer_from_problem(decode_extraction(response, item, source_validation),
-                                   minimal_conflict_search)
+                                   minimal_conflict_search, model_cited_lines(response))
     except SchemaError as exc:
         return {"case": "inconsistent", "conflicts": []}, "unresolved", str(exc)
 
@@ -82,15 +82,29 @@ def solve_count(problem) -> int:
     return len(ScheduleSolver(problem).all_solutions())
 
 
+def _absorb(choices: dict[int, str], response: str, allowed: set[int] | None = None) -> None:
+    """Apply on-menu letters. An off-menu letter or a line outside the batch is ignored."""
+    for number, key in parse_choices(response).items():
+        if allowed is not None and number not in allowed:
+            continue
+        choices[number] = key
+
+
 def solve_item(item: dict, client: GraniteClient, record: dict, records: list,
                run_dir: Path, budget: str, ablate: str | None = None) -> tuple[dict, str, str | None]:
-    """Make 1..budget model calls; every accepted edit is fully revalidated."""
+    """One selection call, then optional review and line batches within the cap.
+
+    A constraint reaches Z3 only when the model picks a menu letter for its line.
+    Missing lines and X add no rule. The structural menu is not applied on its own.
+    """
     item_id = item["id"]
     cap = BUDGETS[budget]
     issues = []
     source_validation = ablate != "source_validation"
     prompt_examples = ablate != "prompt_examples"
     minimal_conflict_search = ablate != "minimal_conflict_search"
+    menus = menus_for_item(item)
+    choices: dict[int, str] = {}
 
     def call(kind: str, messages: list[dict[str, str]]) -> str:
         if len(record["attempts"]) >= cap:
@@ -112,7 +126,6 @@ def solve_item(item: dict, client: GraniteClient, record: dict, records: list,
         return response
 
     def optional_call(kind: str, messages: list[dict[str, str]]) -> str | None:
-        """Use a higher-budget slot without discarding an earlier extraction on failure."""
         try:
             return call(kind, messages)
         except ModelRequestError as exc:
@@ -121,136 +134,47 @@ def solve_item(item: dict, client: GraniteClient, record: dict, records: list,
 
     messages = build_messages(item, prompt_examples)
     record["messages"] = messages
-    response = call("full_extraction", messages)
+    response = call("selection", messages)
     record["response"] = response
-    problem = None
-    try:
-        problem = decode_extraction(response, item, source_validation,
-                                    salvage=True, diagnostics=issues)
-    except SchemaError as exc:
-        issues.append(f"Initial extraction invalid: {exc}")
+    _absorb(choices, response)
 
-    if budget == "1x":
-        answer, status, error = (answer_from_problem(problem, minimal_conflict_search)
-                                 if problem else answer_from_response(
-                                     response, item, source_validation, minimal_conflict_search))
-        return answer, status, "; ".join(filter(None, [*issues, error])) or None
-
-    if problem is None and ablate != "sentence_decomposition":
-        # Recover from an invalid page response using independently validated
-        # line batches. Failed batches are split, so their remaining lines can
-        # still be recovered within the same per-item call cap.
-        header = header_from_item(item)
-        problem = parse_problem({**header, "constraints": [], "ignored_lines": []}, item["text"])
-        pending = batches_for_item(item, min(4, cap - len(record["attempts"])))
-        singleton_failures = {}
-        while pending and len(record["attempts"]) < cap:
-            target = [line for line in pending.pop(0) if line in unclassified_lines(problem, item)]
-            if not target:
-                continue
-            raw = optional_call("bootstrap_batch", batch_messages(item, problem, target))
-            if raw is not None:
-                try:
-                    problem = decode_batch(raw, item, problem, target, source_validation,
-                                           salvage=True, diagnostics=issues)
-                    continue
-                except SchemaError as exc:
-                    issues.append(f"Bootstrap batch {target} rejected: {exc}")
-            if len(target) > 1:
-                midpoint = len(target) // 2
-                pending.extend((target[:midpoint], target[midpoint:]))
-            else:
-                line = target[0]
-                singleton_failures[line] = singleton_failures.get(line, 0) + 1
-                if singleton_failures[line] < 2:
-                    pending.append(target)
-                else:
-                    issues.append(f"Bootstrap line {line} remains unclassified after two attempts")
-        missing = unclassified_lines(problem, item)
-        if missing:
-            return ({"case": "inconsistent", "conflicts": []}, "unresolved",
-                    "; ".join([*issues, f"Unclassified note lines: {missing}"]))
-        if budget == "10x" and ablate != "extraction_review" and len(record["attempts"]) < cap:
-            raw = optional_call("bootstrap_audit", audit_messages(item, problem))
-            if raw is not None:
-                try:
-                    problem, _ = decode_audit(raw, item, problem, source_validation,
-                                              salvage=True, diagnostics=issues)
-                except SchemaError as exc:
-                    issues.append(f"Bootstrap audit rejected: {exc}")
-        if budget == "10x" and len(record["attempts"]) < cap and not unclassified_lines(problem, item):
-            for target in batches_for_item(item, cap - len(record["attempts"])):
-                raw = optional_call("small_batch_reextract", batch_messages(item, problem, target))
-                if raw is not None:
-                    try:
-                        problem = decode_batch(raw, item, problem, target, source_validation,
-                                               salvage=True, diagnostics=issues)
-                    except SchemaError as exc:
-                        issues.append(f"Batch {target} rejected: {exc}")
-        missing = unclassified_lines(problem, item)
-        if missing:
-            return ({"case": "inconsistent", "conflicts": []}, "unresolved",
-                    "; ".join([*issues, f"Unclassified note lines: {missing}"]))
-        answer, status, error = answer_from_problem(problem, minimal_conflict_search)
-        return answer, status, "; ".join(filter(None, [*issues, error])) or None
-
-    while problem is None and len(record["attempts"]) < cap:
-        replacement = optional_call("full_reextract", build_messages(item, prompt_examples))
-        if replacement is None:
-            continue
-        try:
-            problem = decode_extraction(replacement, item, source_validation,
-                                        salvage=True, diagnostics=issues)
-        except SchemaError as exc:
-            issues.append(f"Full re-extraction invalid: {exc}")
-    if problem is None:
-        return {"case": "inconsistent", "conflicts": []}, "unresolved", "; ".join(issues)
-
-    # Audit every valid first pass, even if it yields 1..4 solutions: the
-    # solution count alone cannot expose a plausible but incorrect rule.
-    changed_lines = []
-    if ablate != "extraction_review" and len(record["attempts"]) < cap:
-        raw = optional_call("source_audit", audit_messages(item, problem))
+    if budget != "1x" and ablate != "extraction_review" and len(record["attempts"]) < cap:
+        raw = optional_call("selection_review", review_messages(item, choices, prompt_examples))
         if raw is not None:
-            try:
-                problem, changed_lines = decode_audit(raw, item, problem, source_validation,
-                                                      salvage=True, diagnostics=issues)
-            except SchemaError as exc:
-                issues.append(f"Audit rejected: {exc}")
+            _absorb(choices, raw)
 
     if budget == "3x" and ablate != "sentence_decomposition" and len(record["attempts"]) < cap:
-        target = changed_lines
-        if not target and solve_count(problem) not in {1, 2, 3, 4}:
-            # Anomalous count: re-extract the non-header lines as a focused
-            # one-call batch. Genuine contradictions are allowed to remain.
-            target = note_line_numbers(item)
-        if target:
-            raw = optional_call("focused_reextract", batch_messages(item, problem, target))
+        missing = [number for number, options in menus.items()
+                   if options and number not in choices]
+        if missing:
+            raw = optional_call("focused_reselect",
+                                batch_messages(item, missing, prompt_examples))
             if raw is not None:
-                try:
-                    problem = decode_batch(raw, item, problem, target, source_validation,
-                                           salvage=True, diagnostics=issues)
-                except SchemaError as exc:
-                    issues.append(f"Focused batch rejected: {exc}")
+                _absorb(choices, raw, set(missing))
 
     if budget == "10x" and ablate != "sentence_decomposition":
+        numbered = [number for number, options in menus.items() if options]
         remaining = cap - len(record["attempts"])
-        for target in batches_for_item(item, remaining):
-            raw = optional_call("small_batch_reextract", batch_messages(item, problem, target))
+        for target in _option_batches(numbered, remaining):
+            raw = optional_call("batch_reselect", batch_messages(item, target, prompt_examples))
             if raw is not None:
-                try:
-                    problem = decode_batch(raw, item, problem, target, source_validation,
-                                           salvage=True, diagnostics=issues)
-                except SchemaError as exc:
-                    issues.append(f"Batch {target} rejected: {exc}")
+                _absorb(choices, raw, set(target))
 
-    missing = unclassified_lines(problem, item)
-    if missing:
-        return ({"case": "inconsistent", "conflicts": []}, "unresolved",
-                "; ".join([*issues, f"Unclassified note lines: {missing}"]))
-    answer, status, error = answer_from_problem(problem, minimal_conflict_search)
-    combined = "; ".join(filter(None, [*issues, error])) or None
-    return answer, status, combined
+    try:
+        problem = problem_from_choices(item, choices, source_validation)
+    except SchemaError as exc:
+        issues.append(str(exc))
+        return {"case": "inconsistent", "conflicts": []}, "unresolved", "; ".join(issues)
+    cited = selected_lines(choices, menus)
+    answer, status, error = answer_from_problem(problem, minimal_conflict_search, cited)
+    return answer, status, "; ".join(filter(None, [*issues, error])) or None
+
+
+def _option_batches(numbers: list[int], max_batches: int) -> list[list[int]]:
+    count = min(max_batches, len(numbers))
+    if count <= 0:
+        return []
+    return [numbers[index::count] for index in range(count)]
 
 
 def run_pipeline(items: list[dict], client: GraniteClient, run_dir: Path, output: Path,

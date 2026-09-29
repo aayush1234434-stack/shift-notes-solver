@@ -51,18 +51,24 @@ class ScheduleSolver:
             solutions.append(assignment)
         return solutions
 
-    def minimal_conflict(self) -> list[int]:
+    def minimal_conflict(self, prefer_lines=None) -> list[int]:
         """Shrink complete source statements, keeping header rules permanent.
 
         Minimal means no member can be removed, not globally smallest size.
         Multiple extracted rules from one sentence are removed as a group.
+        Lines the model cited are dropped last, so a restatement it treated as
+        a constraint is kept when either line would complete a valid conflict.
         """
         if self.is_satisfiable():
             raise SolverError("A satisfiable problem has no conflicting set")
         core = sorted(self.compiled.statements)
-        for number in tuple(core):
+        prefer = set(prefer_lines or ())
+        # Uncited lines are removed first. With no preference this is line order,
+        # which is the same shrink the tests lock in.
+        ordered = sorted(core, key=lambda number: (number in prefer, number))
+        for number in ordered:
             trial = [line for line in core if line != number]
-            if not self.is_satisfiable(trial):
+            if trial and not self.is_satisfiable(trial):
                 core = trial
         if not self.validate_conflict(core):
             raise SolverError("Failed to establish a minimal source conflict")
@@ -76,10 +82,10 @@ class ScheduleSolver:
         return all(self.is_satisfiable([other for other in source_lines if other != number])
                    for number in source_lines)
 
-    def result(self) -> dict:
+    def result(self, prefer_lines=None) -> dict:
         solutions = self.all_solutions()
         if not solutions:
-            core = self.minimal_conflict()
+            core = self.minimal_conflict(prefer_lines)
             return {"case": "inconsistent",
                     "conflicts": [self.compiled.sources[number] for number in core]}
         if len(solutions) == 1:
