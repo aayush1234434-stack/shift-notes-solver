@@ -26,7 +26,7 @@ class ClientTests(unittest.TestCase):
         return response
 
     @patch("src.model_client.urllib.request.urlopen")
-    def test_settings_headers_and_one_call_limit(self, send):
+    def test_settings_and_1x(self, send):
         send.return_value = self.response()
         client = self.client()
         client.complete("TEST-001", [{"role": "user", "content": "hello"}])
@@ -45,7 +45,7 @@ class ClientTests(unittest.TestCase):
         self.assertIn('"event": "response"', self.path.read_text())
 
     @patch("src.model_client.urllib.request.urlopen", side_effect=TimeoutError)
-    def test_failed_call_consumes_slot_without_retry(self, send):
+    def test_no_retry(self, send):
         client = self.client()
         with self.assertRaises(ModelRequestError):
             client.complete("TEST-001", [{"role": "user", "content": "hello"}])
@@ -54,7 +54,7 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(send.call_count, 1)
 
     @patch("src.model_client.urllib.request.urlopen")
-    def test_limits_are_per_item(self, send):
+    def test_per_item_limits(self, send):
         send.return_value = self.response()
         client = self.client("3x")
         for _ in range(3):
@@ -66,14 +66,14 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(BudgetExceeded):
             client.assert_budget_compliance(["C"])
 
-    def test_wrong_model_rejected(self):
+    def test_wrong_model(self):
         with self.assertRaises(ValueError):
             ModelConfig.from_env({"OPENROUTER_API_KEY": "key",
                                  "OPENROUTER_BASE_URL": "https://example.test/v1",
                                  "MODEL": "other-model"})
 
     @patch("src.model_client.urllib.request.urlopen")
-    def test_ten_call_limit(self, send):
+    def test_10x_limit(self, send):
         send.return_value = self.response()
         client = self.client("10x")
         for _ in range(10):

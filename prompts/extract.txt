@@ -20,6 +20,8 @@ Generic examples of language meanings (these names are NOT in the item):
 - "Omar finishes before Nina starts." and option "Omar is earlier than Nina." -> that letter
 - "Nobody could remember whether Nina was down for 09:00." -> X
 
-Extract every definite constraint the options list, including hedges. Pick the
-option that matches the note's direction. "X later than Y" means Y is earlier
-than X. Never answer with a letter the line does not list.
+Extract every definite constraint the options list, including hedges. The note
+may use different words from the printed option. Pick the option with the same
+people, block or station, and direction. "X later than Y" means Y is earlier
+than X. If no printed option is the current rule, answer X. Never answer with
+a letter the line does not list.

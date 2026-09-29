@@ -1,9 +1,4 @@
-"""Candidate menus for one note line, and parsing of the model's selection.
-
-Python lists the readings a sentence can bear. It does not decide which reading
-is in force. A line becomes a constraint only when the model picks one of those
-options. X, a missing line, and an off-menu letter add no rule.
-"""
+# Python writes the menu. Granite picks the letter. A line with no accepted letter adds nothing.
 
 import json
 import re
@@ -55,7 +50,7 @@ def describe_rules(rules: list[dict]) -> str:
 
 
 def _flip_order(rule: dict) -> dict | None:
-    """The other direction of an order. Assignment polarity is not flipped."""
+    # Only order flips. "Not on 09:00" stays "not on 09:00"; X covers rejecting it.
     kind = rule["type"]
     if kind in {"before", "after", "immediately_before", "immediately_after"}:
         return {**rule, "person": rule["other_person"], "other_person": rule["person"]}
@@ -85,8 +80,22 @@ def _signature(rules: list[dict]) -> str:
     return json.dumps(rules, sort_keys=True, ensure_ascii=False)
 
 
+# Ordinary order language, not the visible note templates. A sentence can use
+# none of those templates and still name a legal reading.
+_ORDER_CUE = re.compile(
+    r"\b(?:before|after|earlier|later|sooner|ahead|prior|previous|"
+    r"follows|followed|precedes|preceded|preceding|following|between|"
+    r"adjacent|beside|immediately|directly)\b",
+    re.IGNORECASE)
+_IMMEDIATE_CUE = re.compile(r"\b(?:immediately|directly)\b", re.IGNORECASE)
+
+
+def _order_cue(text: str) -> bool:
+    return _ORDER_CUE.search(text) is not None
+
+
 def _generic_rules(line: str, header: dict) -> list[list[dict]]:
-    """A short menu when the structural reader does not recognize the wording."""
+    # Fallback for wording the reader doesn't know: offer what the named entities allow.
     body = _reading_text(line)
     people = []
     for name in header["people"]:
@@ -98,20 +107,28 @@ def _generic_rules(line: str, header: dict) -> list[list[dict]]:
     stations = [value for value in header["stations"]
                 if re.search(rf"(?<!\w){re.escape(value)}(?!\w)", body, re.IGNORECASE)]
     holders = set(header["station_holders"])
+    ordered = _order_cue(body)
     found = []
     if len(people) == 1 and len(blocks) == 1 and not stations:
         person, block = people[0], blocks[0]
         found.append([{"type": "fixed_block", "person": person, "block": block}])
         found.append([{"type": "not_block", "person": person, "block": block}])
-    elif len(people) == 1 and len(stations) == 1 and people[0] in holders and not blocks:
+    elif len(people) == 1 and len(stations) == 1 and not blocks:
         person, station = people[0], stations[0]
-        found.append([{"type": "fixed_station", "person": person, "station": station}])
-        found.append([{"type": "not_station", "person": person, "station": station}])
-    elif (len(people) == 2 and not blocks and not stations
-          and re.search(r"\b(?:before|after|earlier|later|between)\b", body, re.IGNORECASE)):
+        if person in holders:
+            found.append([{"type": "fixed_station", "person": person, "station": station}])
+            found.append([{"type": "not_station", "person": person, "station": station}])
+        if ordered:
+            found.append([{"type": "station_before_person", "station": station, "person": person}])
+            found.append([{"type": "station_after_person", "station": station, "person": person}])
+    elif len(people) == 2 and not blocks and not stations and ordered:
         first, second = people
-        found.append([{"type": "before", "person": first, "other_person": second}])
-        found.append([{"type": "before", "person": second, "other_person": first}])
+        pairs = [("before", first, second), ("before", second, first)]
+        if _IMMEDIATE_CUE.search(body):
+            pairs.extend((("immediately_before", first, second),
+                          ("immediately_before", second, first)))
+        for kind, person, other in pairs:
+            found.append([{"type": kind, "person": person, "other_person": other}])
     elif len(people) == 3 and re.search(r"\bbetween\b", body, re.IGNORECASE):
         for middle in people:
             others = [name for name in people if name != middle]
@@ -121,7 +138,6 @@ def _generic_rules(line: str, header: dict) -> list[list[dict]]:
 
 
 def options_for_line(line: str, header: dict) -> list[dict]:
-    """Up to four labeled interpretations. X is not one of them."""
     bundles = []
     reading = interpret_line(line, header, decide_status=False)
     if reading and reading[0] == "rules":
@@ -130,7 +146,7 @@ def options_for_line(line: str, header: dict) -> list[dict]:
         flipped = _flip_rules(proposed)
         if flipped is not None and _signature(flipped) != _signature(proposed):
             bundles.append(flipped)
-    elif reading is None:
+    else:
         bundles.extend(_generic_rules(line, header))
     options = []
     seen = set()
@@ -174,7 +190,7 @@ def format_menu(item: dict, numbers: list[int] | None = None,
 
 
 def parse_choices(response: str) -> dict[int, str]:
-    """Map a line number to A–H or X. Later mentions of a line replace earlier ones."""
+    # If Granite answers a line twice, the last answer wins.
     text = response or ""
     choices = {}
     for match in _CHOICE.finditer(text):
@@ -199,7 +215,6 @@ def parse_choices(response: str) -> dict[int, str]:
 
 
 def problem_from_choices(item: dict, choices: dict[int, str], source_validation: bool = True):
-    """Build a problem from menu selections. Off-menu and missing lines add no rule."""
     header = header_from_item(item)
     lines = numbered_lines(item)
     menus = menus_for_item(item)
@@ -245,7 +260,6 @@ def batch_messages(item: dict, numbers: list[int],
 
 
 def selected_lines(choices: dict[int, str], menus: dict[int, list[dict]]) -> set[int]:
-    """Lines where the model accepted an on-menu rule rather than rejecting it."""
     accepted = set()
     for number, options in menus.items():
         key = choices.get(number)

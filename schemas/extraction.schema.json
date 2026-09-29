@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Shift note extraction",
+  "title": "Scheduling problem passed to the solver",
+  "description": "Python builds this object after Granite selects a menu letter for each note line. Granite does not return this JSON. src/schema.py validates the same object on the ./run path.",
   "type": "object",
   "additionalProperties": false,
   "required": ["people", "blocks", "stations", "station_holders", "constraints"],
@@ -12,7 +13,8 @@
     "ignored_lines": {"type": "array", "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
     "constraints": {"type": "array", "items": {"oneOf": [
       {"$ref": "#/$defs/blockRule"}, {"$ref": "#/$defs/stationRule"},
-      {"$ref": "#/$defs/orderRule"}, {"$ref": "#/$defs/betweenRule"}
+      {"$ref": "#/$defs/orderRule"}, {"$ref": "#/$defs/betweenRule"},
+      {"$ref": "#/$defs/stationOrderRule"}
     ]}}
   },
   "$defs": {
@@ -51,6 +53,15 @@
       "properties": {
         "type": {"const": "between"}, "person": {"$ref": "#/$defs/text"},
         "other_person": {"$ref": "#/$defs/text"}, "third_person": {"$ref": "#/$defs/text"},
+        "source": {"$ref": "#/$defs/text"}, "source_line": {"$ref": "#/$defs/sourceLine"}
+      }
+    },
+    "stationOrderRule": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "station", "person", "source", "source_line"],
+      "properties": {
+        "type": {"enum": ["station_before_person", "station_after_person"]},
+        "station": {"$ref": "#/$defs/text"}, "person": {"$ref": "#/$defs/text"},
         "source": {"$ref": "#/$defs/text"}, "source_line": {"$ref": "#/$defs/sourceLine"}
       }
     }

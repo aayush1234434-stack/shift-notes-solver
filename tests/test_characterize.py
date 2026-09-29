@@ -5,7 +5,7 @@ from src.characterize import inspect_response, select_sample
 
 
 class CharacterizationTests(unittest.TestCase):
-    def test_sample_balanced_reproducible_and_not_first_items_only(self):
+    def test_sample(self):
         items = [{"id": str(i), "text": "notes"} for i in range(12)]
         cases = ("unique", "ambiguous", "inconsistent")
         key = {str(i): {"case": cases[i // 4]} for i in range(12)}
@@ -15,11 +15,11 @@ class CharacterizationTests(unittest.TestCase):
         for case in cases:
             self.assertEqual(sum(key[x["id"]]["case"] == case for x in sample), 2)
 
-    def test_json_fences_are_reported_not_silently_repaired(self):
+    def test_json_fences(self):
         issues = inspect_response('```json\n{}\n```', ["notes"])
         self.assertEqual(issues[0]["kind"], "malformed_json")
 
-    def test_source_and_entity_errors_and_coverage(self):
+    def test_errors_and_coverage(self):
         data = {"people": ["Alice", "Bob"], "blocks": ["07:00", "09:00"],
                 "stations": ["intake"], "station_holders": ["Alice"],
                 "constraints": [{"type": "before", "person": "Ghost",
@@ -31,7 +31,7 @@ class CharacterizationTests(unittest.TestCase):
         self.assertTrue({"unknown_entity", "source_mismatch", "conflicting_classification",
                          "unaccounted_line"}.issubset(kinds))
 
-    def test_semantic_mistake_not_claimed_as_automatic_detection(self):
+    def test_semantic_mistake(self):
         data = {"people": ["Alice", "Bob"], "blocks": ["07:00", "09:00"],
                 "stations": ["intake"], "station_holders": ["Alice"],
                 "constraints": [{"type": "after", "person": "Alice", "other_person": "Bob",

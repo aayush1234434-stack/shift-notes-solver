@@ -12,7 +12,7 @@ from tests.test_pipeline import SequenceClient, invented_item
 
 
 class AblationTests(unittest.TestCase):
-    def test_call_count_is_collected_from_pipeline_evidence(self):
+    def test_call_count(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "summary.json").write_text(json.dumps({
@@ -20,7 +20,7 @@ class AblationTests(unittest.TestCase):
             self.assertEqual(model_calls_from_stdout(f"Answers: x\nEvidence: {root}\n"), 3)
             self.assertIsNone(model_calls_from_stdout("No evidence"))
 
-    def test_prompt_examples_switch_removes_only_examples(self):
+    def test_no_examples(self):
         item, _ = invented_item("unique")
         full = build_messages(item)[0]["content"]
         ablated = build_messages(item, prompt_examples=False)[0]["content"]
@@ -29,7 +29,7 @@ class AblationTests(unittest.TestCase):
         self.assertIn("Extract every definite constraint", ablated)
         self.assertEqual(build_messages(item)[1], build_messages(item, False)[1])
 
-    def test_source_validation_switch_changes_acceptance(self):
+    def test_no_source_check(self):
         item, data = invented_item("unique")
         data["constraints"][0]["source"] = "Invented quote."
         from src.schema import SchemaError
@@ -38,7 +38,7 @@ class AblationTests(unittest.TestCase):
         problem = decode_extraction(json.dumps(data), item, source_validation=False)
         self.assertEqual(problem.constraints[0].source, "Invented quote.")
 
-    def test_review_and_decomposition_switches_change_calls(self):
+    def test_review_switches(self):
         item, data = invented_item("unique")
         for budget, ablation, expected in (("3x", "extraction_review", 1),
                                            ("10x", "sentence_decomposition", 2)):
@@ -51,7 +51,7 @@ class AblationTests(unittest.TestCase):
                 self.assertEqual(client.call_counts[item["id"]], expected)
                 self.assertEqual(json.loads(out.read_text())[item["id"]]["case"], "unique")
 
-    def test_core_search_ablation_has_inconsistent_label_without_citations(self):
+    def test_no_core_search(self):
         item, data = invented_item("inconsistent")
         problem = decode_extraction(json.dumps(data), item)
         self.assertEqual(answer_from_problem(problem)[0]["case"], "inconsistent")
@@ -60,7 +60,7 @@ class AblationTests(unittest.TestCase):
         self.assertEqual(answer, {"case": "inconsistent", "conflicts": []})
 
     @patch("src.evaluate.subprocess.run")
-    def test_report_uses_only_official_completed_scores(self, runner):
+    def test_report(self, runner):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             items, key, scorer = [root / name for name in ("items.json", "key.json", "score.py")]
@@ -90,7 +90,7 @@ class AblationTests(unittest.TestCase):
             self.assertEqual(sum("--ablate" in command for command in commands), 2)
 
     @patch("src.evaluate.subprocess.run")
-    def test_failed_endpoint_produces_unmeasured_table_not_zero(self, runner):
+    def test_failed_endpoint(self, runner):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             items, key, scorer = [root / name for name in ("items.json", "key.json", "score.py")]
@@ -110,7 +110,7 @@ class AblationTests(unittest.TestCase):
             self.assertIn("HTTP 402", report)
 
     @patch("src.evaluate.subprocess.run")
-    def test_balanced_pilot_shards_merge_before_official_scoring(self, runner):
+    def test_shards(self, runner):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             items, key, scorer = [root / name for name in ("items.json", "key.json", "score.py")]
@@ -148,7 +148,7 @@ class AblationTests(unittest.TestCase):
             self.assertIn("balanced pilot", (root / "eval" / "ablation_table.md").read_text())
 
     @patch("src.evaluate.subprocess.run")
-    def test_timed_out_run_is_recorded_as_unmeasured(self, runner):
+    def test_timeout(self, runner):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             items, key, scorer = [root / name for name in ("items.json", "key.json", "score.py")]

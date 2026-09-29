@@ -1,5 +1,3 @@
-"""Validated, immutable extraction data. No model calls or semantic parsing."""
-
 from dataclasses import dataclass
 
 RELATION_FIELDS = {
@@ -41,12 +39,8 @@ class Problem:
 
 
 def parse_problem(data: dict, raw_text: str | None = None) -> Problem:
-    """Validate extraction and optionally match sources to numbered raw lines.
-
-    Source numbering counts nonempty lines from 1, matching Phase 2. Block list
-    order is chronological. We preserve strings; we do not trim or normalize.
-    Invalid extraction raises an error rather than silently discarding a rule.
-    """
+    # Lines are the nonempty lines of the item, counted from 1. Blocks are in time order.
+    # Strings are kept exactly: the scorer compares names and citations byte for byte.
     required = {"people", "blocks", "stations", "station_holders", "constraints"}
     if not isinstance(data, dict) or not required <= data.keys():
         raise SchemaError("Missing required extraction fields")

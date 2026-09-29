@@ -19,13 +19,13 @@ def example(case):
 
 
 class AnswerValidationTests(unittest.TestCase):
-    def test_all_three_solver_outputs_pass_independent_check(self):
+    def test_examples_pass(self):
         for case in ("unique", "ambiguous", "inconsistent"):
             with self.subTest(case=case):
                 problem, answer = example(case)
                 validate_answer_for_problem(answer, problem)
 
-    def test_missing_person_wrong_station_and_invalid_block_fail(self):
+    def test_bad_assignments(self):
         problem, answer = example("unique")
         for mutation in (
             lambda a: a["assignment"].pop("Bob"),
@@ -37,13 +37,13 @@ class AnswerValidationTests(unittest.TestCase):
             with self.assertRaises(AnswerValidationError):
                 validate_answer_for_problem(damaged, problem)
 
-    def test_missing_ambiguous_schedule_fails(self):
+    def test_missing_schedule(self):
         problem, answer = example("ambiguous")
         answer["assignments"].pop()
         with self.assertRaises(ValueError):
             validate_answer_for_problem(answer, problem)
 
-    def test_conflict_must_be_exact_and_deletion_minimal(self):
+    def test_conflict_minimal(self):
         problem, answer = example("inconsistent")
         for citations in ([], answer["conflicts"][:-1],
                           answer["conflicts"] + [problem.constraints[-1].source],
@@ -51,7 +51,7 @@ class AnswerValidationTests(unittest.TestCase):
             with self.subTest(citations=citations), self.assertRaises(AnswerValidationError):
                 validate_answer_for_problem({"case": "inconsistent", "conflicts": citations}, problem)
 
-    def test_reference_enumerator_includes_station_variants(self):
+    def test_station_variants(self):
         problem, _ = example("ambiguous")
         schedules = reference_schedules(problem)
         self.assertEqual(len(schedules), 2)

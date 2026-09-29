@@ -1,5 +1,3 @@
-"""Single-call extraction messages and deterministic response validation."""
-
 import json
 import re
 from pathlib import Path
@@ -83,7 +81,7 @@ def note_line_numbers(item: dict) -> list[int]:
 
 
 def header_from_item(item: dict) -> dict[str, list[str]]:
-    """Read the standardized rota header without asking Granite to reproduce it."""
+    # Parsed here, not by Granite: asked to copy the staff list, it invented names.
     _, match = _header_match(item)
     values = {name: match[name].split(", ")
               for name in ("people", "blocks", "stations", "station_holders")}
@@ -101,13 +99,11 @@ def header_from_item(item: dict) -> dict[str, list[str]]:
 
 
 def _entities_in(text: str, values: list[str]) -> list[str]:
-    """Header strings, matched without case so a sentence-initial capital still counts."""
     return [value for value in values
             if re.search(r"(?<!\w)" + re.escape(value) + r"(?!\w)", text, re.IGNORECASE)]
 
 
 def _mentioned(text: str, values: list[str]) -> list[str]:
-    """Entity mentions in left-to-right order, using the header's exact strings."""
     found = []
     for value in values:
         match = re.search(r"(?<!\w)" + re.escape(value) + r"(?!\w)", text, re.IGNORECASE)
@@ -117,7 +113,6 @@ def _mentioned(text: str, values: list[str]) -> list[str]:
 
 
 def _unambiguous_order(line: str, header: dict) -> dict | None:
-    """Verify explicit two-operand ordering; leave complex prose to the model."""
     people = header["people"]
     stations = header["stations"]
     between_match = re.search(r"\b(after|before) one of\b", line, re.IGNORECASE)
@@ -164,7 +159,7 @@ def _unambiguous_order(line: str, header: dict) -> dict | None:
 
 
 def _reading_text(line: str) -> str:
-    """Drop a leading hedge so the constraint it introduces can be read."""
+    # Only for reading the rule. The citation keeps the hedge: the brief wants the full line.
     text = line.strip()
     previous = None
     while text != previous:
@@ -181,7 +176,6 @@ def _symmetric_people(line: str, header: dict, kind: str) -> dict | None:
 
 
 def _extra_relation(line: str, header: dict) -> dict | None:
-    """Relations whose wording is explicit but which are not a single connector."""
     if re.search(r"\bnot\s+(?:adjacent(?:\s+to)?|next to|beside)\b", line, re.IGNORECASE):
         return _symmetric_people(line, header, "not_adjacent")
     if (re.search(r"\b(?:adjacent to|next to|beside)\b", line, re.IGNORECASE)
@@ -208,7 +202,6 @@ def _extra_relation(line: str, header: dict) -> dict | None:
 
 
 def _link_window(text: str, left: str, right: str) -> str | None:
-    """The text spanning two entity mentions, with neither match inside the other."""
     found = [re.search(rf"(?<!\w){re.escape(value)}(?!\w)", text) for value in (left, right)]
     if any(match is None for match in found):
         return None
@@ -218,7 +211,6 @@ def _link_window(text: str, left: str, right: str) -> str | None:
 
 def _assignment_rules(body: str, header: dict, people: list[str],
                       blocks: list[str], stations: list[str]) -> list[dict]:
-    """A single person tied to one block and/or one station by a nearby assignment cue."""
     if len(people) != 1:
         return []
     person = people[0]
@@ -254,7 +246,6 @@ def _pair_around(text: str, header: dict, verb: str):
 
 
 def _known_idiom(body: str, header: dict):
-    """Read scheduling idioms whose cue is not a single before/after connector."""
     people = _mentioned(body, header["people"])
     blocks = _entities_in(body, header["blocks"])
     stations = _entities_in(body, header["stations"])
@@ -335,11 +326,8 @@ def _known_idiom(body: str, header: dict):
 
 
 def interpret_clause(line: str, header: dict, decide_status: bool = True):
-    """Return a confident reading, or None when the clause should be left to the model.
-
-    decide_status is false when the caller only wants readings the words can bear.
-    Whether the line is current is then the model's choice, not this function's.
-    """
+    # decide_status=False keeps "last month" and "whether" lines on the menu, so Granite
+    # is the one that rejects them.
     body = _reading_text(line)
     if not body:
         return ("ignore", [])
@@ -376,7 +364,6 @@ def interpret_clause(line: str, header: dict, decide_status: bool = True):
 
 
 def interpret_line(line: str, header: dict, decide_status: bool = True):
-    """Classify one note line. None means the model's reading is the authority."""
     parts = [part.strip() for part in re.split(r";\s*|(?<=[.!?])\s+", line) if part.strip()]
     if len(parts) <= 1:
         if decide_status and NONCURRENT.search(line):
@@ -401,10 +388,6 @@ def interpret_line(line: str, header: dict, decide_status: bool = True):
 
 def overlay_symbolic(data: dict, item: dict, header: dict,
                      diagnostics: list[str] | None = None) -> None:
-    """Replace a line's model rules when the sentence has one confident reading.
-
-    Lines the reader cannot decide keep whatever valid rules the model supplied.
-    """
     lines = numbered_lines(item)
     by_line: dict[int, list] = {}
     for rule in data["constraints"]:
@@ -441,7 +424,6 @@ def overlay_symbolic(data: dict, item: dict, header: dict,
 
 
 def model_cited_lines(response: str) -> set[int]:
-    """Line numbers the model attached to a constraint, ignoring malformed JSON."""
     text = (response or "").strip()
     if text.startswith("```json\n") and text.endswith("\n```"):
         text = text[len("```json\n"):-len("\n```")]
@@ -471,7 +453,6 @@ def model_cited_lines(response: str) -> set[int]:
 
 
 def recover_from_text(item: dict, diagnostics: list[str] | None = None):
-    """Build a problem from confident line readings when the model JSON cannot be used."""
     header = header_from_item(item)
     data = {**header, "constraints": [], "ignored_lines": []}
     overlay_symbolic(data, item, header, diagnostics)
@@ -492,7 +473,6 @@ def selection_prompt(prompt_examples: bool = True) -> str:
 
 
 def build_messages(item: dict, prompt_examples: bool = True) -> list[dict[str, str]]:
-    """Ask the model to pick a listed reading. The menu is the only legal output."""
     from .selection import format_menu
     header = header_from_item(item)
     return [
@@ -656,6 +636,5 @@ def decode_extraction(response: str, item: dict, source_validation: bool = True,
 
 
 def unclassified_lines(problem, item: dict) -> list[int]:
-    """Return note lines with neither an accepted rule nor an explicit ignore."""
     classified = {rule.source_line for rule in problem.constraints} | set(problem.ignored_lines)
     return sorted(set(note_line_numbers(item)) - classified)

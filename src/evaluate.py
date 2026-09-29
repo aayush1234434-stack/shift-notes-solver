@@ -16,7 +16,7 @@ from pathlib import Path
 from statistics import mean
 
 from .model_client import BUDGETS, MODEL
-from .output_writer import atomic_json
+from .output_writer import write_json
 from .pipeline import ABLATIONS, ROOT
 
 CASES = ("unique", "ambiguous", "inconsistent")
@@ -155,8 +155,8 @@ def evaluate(items: Path, key: Path, scorer: Path, out_dir: Path,
         item_data = [item for item in item_data if item["id"] in selected_ids]
         key_data = {item["id"]: key_data[item["id"]] for item in item_data}
         items, key = out_dir / "pilot_items.json", out_dir / "pilot_key.json"
-        atomic_json(items, item_data)
-        atomic_json(key, key_data)
+        write_json(items, item_data)
+        write_json(key, key_data)
     manifest = {
         "created": datetime.now(timezone.utc).isoformat(), "items": str(items.resolve()),
         "key": str(key.resolve()), "score_script": str(scorer.resolve()),
@@ -174,13 +174,13 @@ def evaluate(items: Path, key: Path, scorer: Path, out_dir: Path,
         "prompt_sha256": {name: checksum(ROOT / "prompts" / name)
                           for name in ("extract.txt", "audit.txt", "batch_extract.txt")},
     }
-    atomic_json(out_dir / "manifest.json", manifest)
+    write_json(out_dir / "manifest.json", manifest)
     results = {variant: {budget: [
         {"run_number": number, "status": "not_run"} for number in range(1, repeats + 1)
     ] for budget in budgets} for variant in variants}
 
     def persist():
-        atomic_json(out_dir / "results.json", results)
+        write_json(out_dir / "results.json", results)
         (out_dir / "ablation_table.md").write_text(render_report(manifest, results), encoding="utf-8")
 
     persist()
@@ -222,7 +222,7 @@ def evaluate(items: Path, key: Path, scorer: Path, out_dir: Path,
                         index, group = index_and_group
                         shard_input = out_dir / f"{stem}-shard{index}-items.json"
                         shard_output = out_dir / f"{stem}-shard{index}-answers.json"
-                        atomic_json(shard_input, group)
+                        write_json(shard_input, group)
                         shard_command = [str(ROOT / "run"), str(shard_input), "--budget", budget,
                                          "--out", str(shard_output)]
                         if variant != "full":
@@ -246,7 +246,7 @@ def evaluate(items: Path, key: Path, scorer: Path, out_dir: Path,
                             merged.update(shard_answers)
                         if set(merged) != set(key_data):
                             raise ValueError("Merged shard answers do not match input IDs")
-                        atomic_json(output, merged)
+                        write_json(output, merged)
                     execution = type("Execution", (), {
                         "returncode": max(result.returncode for result, _, _ in shard_runs),
                         "stdout": "\n".join(result.stdout for result, _, _ in shard_runs),

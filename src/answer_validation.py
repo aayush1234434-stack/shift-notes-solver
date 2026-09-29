@@ -1,8 +1,5 @@
-"""Independent, exhaustive checks of answers against extracted constraints.
-
-This deliberately does not use Z3 or the constraint compiler. The assignment's
-at-most-five-person search space is small enough to cross-check every schedule.
-"""
+# Brute-force check of every answer, without Z3, so a compiler bug can't grade itself.
+# Rotas are at most five people, so trying every permutation is cheap.
 
 import itertools
 import json
@@ -51,7 +48,6 @@ def _satisfies(rule, blocks: dict[str, int], stations: dict[str, str],
 
 
 def reference_schedules(problem: Problem, source_lines: set[int] | None = None) -> list[dict]:
-    """Enumerate schedules without using the production solver."""
     count = math.factorial(len(problem.people)) * math.factorial(len(problem.stations))
     if count > 100_000:
         raise AnswerValidationError("Independent schedule check exceeds its size limit")
@@ -78,7 +74,6 @@ def _signature(assignment: dict) -> str:
 
 def validate_answer_for_problem(answer: dict, problem: Problem,
                                 allow_partial: bool = False) -> None:
-    """Prove output completeness, validity, and exact source-line citations."""
     try:
         validate_answer(answer)
     except ValueError as exc:

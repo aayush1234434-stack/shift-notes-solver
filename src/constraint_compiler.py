@@ -1,5 +1,3 @@
-"""Compile typed rules into Z3 expressions, retaining statement provenance."""
-
 from dataclasses import dataclass
 
 import z3

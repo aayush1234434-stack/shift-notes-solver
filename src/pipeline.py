@@ -1,4 +1,4 @@
-"""Budgeted extraction, validation, Z3 solving, and final answer JSON."""
+"""./run entrypoint: menu selection with Granite, then Z3."""
 
 import argparse
 import hashlib
@@ -15,7 +15,7 @@ from .extractor import build_messages, decode_extraction, model_cited_lines
 from .selection import (batch_messages, menus_for_item, parse_choices,
                         problem_from_choices, review_messages, selected_lines)
 from .model_client import BUDGETS, GraniteClient, MODEL, ModelConfig, ModelRequestError
-from .output_writer import atomic_json, write_answers
+from .output_writer import write_answers, write_json
 from .schema import SchemaError
 from .solver import ExtractionIncompleteError, ScheduleSolver, SolverError
 
@@ -27,21 +27,10 @@ ABLATIONS = ("prompt_examples", "source_validation", "extraction_review",
 def validate_items(items) -> None:
     if not isinstance(items, list) or not items:
         raise ValueError("Input must be a nonempty JSON array")
-    ids = []
-    for item in items:
-        if not isinstance(item, dict):
-            raise ValueError("Each item must be an object")
-        item_id = item.get("id")
-        if not isinstance(item_id, str) or not item_id or item_id.strip() != item_id or any(
-            ord(char) < 32 or ord(char) > 126 for char in item_id
-        ):
-            raise ValueError("Each item needs a printable, nonempty ASCII ID")
-        if not isinstance(item.get("text"), str) or not item["text"].strip():
-            raise ValueError(f"{item_id}: missing notes")
-        for field in ("n_staff", "n_stations"):
-            if field in item and (type(item[field]) is not int or item[field] < 0):
-                raise ValueError(f"{item_id}: invalid {field}")
-        ids.append(item_id)
+    ids = [item.get("id") for item in items]
+    if not all(isinstance(item_id, str) and item_id for item_id in ids):
+        raise ValueError("Every item needs an id")
+    # The budget is counted per id at the proxy, so two items cannot share one.
     if len(ids) != len(set(ids)):
         raise ValueError("Duplicate item IDs")
 
@@ -55,17 +44,16 @@ def answer_from_problem(problem, minimal_conflict_search: bool = True,
         try:
             answer = solver.result(prefer_lines)
         except ExtractionIncompleteError as exc:
-            # No second call exists at 1x. Return a documented partial attempt
-            # rather than inventing rules. All emitted schedules satisfy extraction.
+            # More than four schedules is never a valid answer. Return four real ones
+            # rather than inventing a rule to cut the count down.
             answer = {"case": "ambiguous", "assignments": solver.all_solutions()[:4]}
             validate_answer_for_problem(answer, problem, allow_partial=True)
             return answer, "partial_extraction", str(exc)
         validate_answer_for_problem(answer, problem)
         return answer, "solved_from_extraction", None
     except (SchemaError, SolverError, AnswerValidationError) as exc:
-        # There is no abstention shape in the assignment. An empty conflicting
-        # set earns zero credit; logs explicitly label this as unresolved, not
-        # as a certified contradiction. Never fabricate names or citations.
+        # The format has no "don't know". An empty conflict list scores zero,
+        # which beats citing lines we could not show conflict.
         return {"case": "inconsistent", "conflicts": []}, "unresolved", str(exc)
 
 
@@ -83,7 +71,6 @@ def solve_count(problem) -> int:
 
 
 def _absorb(choices: dict[int, str], response: str, allowed: set[int] | None = None) -> None:
-    """Apply on-menu letters. An off-menu letter or a line outside the batch is ignored."""
     for number, key in parse_choices(response).items():
         if allowed is not None and number not in allowed:
             continue
@@ -92,11 +79,7 @@ def _absorb(choices: dict[int, str], response: str, allowed: set[int] | None = N
 
 def solve_item(item: dict, client: GraniteClient, record: dict, records: list,
                run_dir: Path, budget: str, ablate: str | None = None) -> tuple[dict, str, str | None]:
-    """One selection call, then optional review and line batches within the cap.
-
-    A constraint reaches Z3 only when the model picks a menu letter for its line.
-    Missing lines and X add no rule. The structural menu is not applied on its own.
-    """
+    # Only a letter Granite picked becomes a rule. Nothing falls back to the parser.
     item_id = item["id"]
     cap = BUDGETS[budget]
     issues = []
@@ -111,18 +94,13 @@ def solve_item(item: dict, client: GraniteClient, record: dict, records: list,
             raise RuntimeError(f"{item_id}: internal call budget exceeded")
         attempt = {"kind": kind, "messages": messages, "response": None, "error": None}
         record["attempts"].append(attempt)
-        atomic_json(run_dir / "records.json", records)
         try:
             response = client.complete(item_id, messages)
         except ModelRequestError as exc:
             attempt["error"] = str(exc)
             record.update(status="endpoint_failure", error=str(exc))
-            atomic_json(run_dir / "records.json", records)
-            atomic_json(run_dir / "call_counts.json", client.call_counts)
             raise
         attempt["response"] = response
-        atomic_json(run_dir / "records.json", records)
-        atomic_json(run_dir / "call_counts.json", client.call_counts)
         return response
 
     def optional_call(kind: str, messages: list[dict[str, str]]) -> str | None:
@@ -191,12 +169,13 @@ def run_pipeline(items: list[dict], client: GraniteClient, run_dir: Path, output
         record = {"item_id": item["id"], "messages": None, "response": None,
                   "attempts": [], "status": "request_pending", "error": None, "answer": None}
         records.append(record)
-        atomic_json(run_dir / "records.json", records)
-        answer, status, error = solve_item(item, client, record, records, run_dir, budget, ablate)
-        answers[item["id"]] = answer
-        record.update(status=status, error=error, answer=answer)
-        atomic_json(run_dir / "records.json", records)
-        atomic_json(run_dir / "call_counts.json", client.call_counts)
+        try:
+            answer, status, error = solve_item(item, client, record, records, run_dir, budget, ablate)
+            answers[item["id"]] = answer
+            record.update(status=status, error=error, answer=answer)
+        finally:
+            write_json(run_dir / "records.json", records)
+            write_json(run_dir / "call_counts.json", client.call_counts)
         print(f"[{position}/{len(items)}] {item['id']}: {status}", file=sys.stderr)
     client.assert_budget_compliance([item["id"] for item in items])
     write_answers(output, answers, [item["id"] for item in items])
@@ -225,27 +204,23 @@ def main() -> int:
         config = ModelConfig.from_env()
         run_dir = ROOT / "experiments" / "runs" / ("pipeline-" + uuid.uuid4().hex)
         run_dir.mkdir(parents=True)
-        prompt_hashes = {
-            name: hashlib.sha256((ROOT / "prompts" / name).read_bytes()).hexdigest()
-            for name in ("extract.txt", "audit.txt", "batch_extract.txt")
-        }
-        atomic_json(run_dir / "manifest.json", {
+        prompt_hash = hashlib.sha256((ROOT / "prompts" / "extract.txt").read_bytes()).hexdigest()
+        write_json(run_dir / "manifest.json", {
             "created": datetime.now(timezone.utc).isoformat(), "budget": args.budget,
             "ablate": args.ablate,
             "model": MODEL, "temperature": 1.0, "top_p": 0.95,
             "reasoning": {"enabled": False}, "items": len(items),
             "input_sha256": hashlib.sha256(args.items.read_bytes()).hexdigest(),
-            "prompt_sha256": prompt_hashes,
+            "prompt_sha256": prompt_hash,
             "output": str(args.out.resolve()), "item_ids": [item["id"] for item in items]})
         client = GraniteClient(config, args.budget, run_dir / "calls.jsonl")
         summary = run_pipeline(items, client, run_dir, args.out, args.budget, args.ablate)
-        atomic_json(run_dir / "summary.json", {"status": "completed", **summary})
+        write_json(run_dir / "summary.json", {"status": "completed", **summary})
         print(f"Answers: {args.out}\nEvidence: {run_dir}")
         return 0
     except (OSError, ValueError, ModelRequestError, SolverError) as exc:
         if run_dir is not None:
-            atomic_json(run_dir / "summary.json", {"status": "failed", "error": str(exc),
-                "note": "No final output was published by this run. Any older output is unchanged."})
+            write_json(run_dir / "summary.json", {"status": "failed", "error": str(exc)})
         print(f"Run failed: {exc}", file=sys.stderr)
         if run_dir:
             print(f"Evidence: {run_dir}", file=sys.stderr)

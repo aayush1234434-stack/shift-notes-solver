@@ -1,8 +1,5 @@
-"""Shape validation and atomic publication of final answer files."""
-
 import json
 import os
-import tempfile
 from pathlib import Path
 
 
@@ -14,10 +11,8 @@ def validate_answer(answer: dict) -> None:
     if case not in fields or set(answer) != {"case", fields[case]}:
         raise ValueError("Invalid answer case or fields")
     if case == "inconsistent":
-        if not isinstance(answer["conflicts"], list) or any(
-            not isinstance(source, str) or not source or "\n" in source or "\r" in source
-            for source in answer["conflicts"]
-        ):
+        if not isinstance(answer["conflicts"], list) or not all(
+                isinstance(source, str) and source for source in answer["conflicts"]):
             raise ValueError("Invalid conflict citations")
         return
     assignments = [answer["assignment"]] if case == "unique" else answer["assignments"]
@@ -28,33 +23,17 @@ def validate_answer(answer: dict) -> None:
     for assignment in assignments:
         if not isinstance(assignment, dict) or not assignment:
             raise ValueError("Assignment must include people")
-        for person, values in assignment.items():
-            if not isinstance(person, str) or not isinstance(values, dict) or "block" not in values:
+        for values in assignment.values():
+            if not isinstance(values, dict) or "block" not in values or set(values) - {"block", "station"}:
                 raise ValueError("Invalid assignment fields")
-            if set(values) - {"block", "station"} or any(
-                not isinstance(value, str) or not value for value in values.values()
-            ):
-                raise ValueError("Invalid block or station")
     if len({json.dumps(a, sort_keys=True) for a in assignments}) != len(assignments):
         raise ValueError("Duplicate schedules")
 
 
-def atomic_json(path: Path, value) -> None:
+def write_json(path: Path, value) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
-                                         prefix=".tmp-", delete=False) as stream:
-            temporary = Path(stream.name)
-            json.dump(value, stream, ensure_ascii=False, indent=2)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        if temporary is not None and temporary.exists():
-            temporary.unlink()
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def write_answers(path: Path, answers: dict, expected_ids: list[str]) -> None:
@@ -62,4 +41,8 @@ def write_answers(path: Path, answers: dict, expected_ids: list[str]) -> None:
         raise ValueError("Output must contain every input ID and no extra IDs")
     for answer in answers.values():
         validate_answer(answer)
-    atomic_json(path, answers)
+    # Write beside the target and rename, so a crash never leaves half an answers file.
+    path = Path(path)
+    temporary = path.with_name(path.name + ".tmp")
+    write_json(temporary, answers)
+    os.replace(temporary, path)

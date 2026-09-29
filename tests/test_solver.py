@@ -21,7 +21,7 @@ def signature(assignment):
 
 
 class SolverTests(unittest.TestCase):
-    def test_unique_example_preserves_names_and_omits_nonholder_station(self):
+    def test_unique(self):
         data, notes = example("unique")
         answer = solve_problem(parse_problem(data, notes))
         self.assertEqual(answer, {"case": "unique", "assignment": {
@@ -29,7 +29,7 @@ class SolverTests(unittest.TestCase):
             "Bob": {"block": "09:00"},
             "Carla": {"block": "11:00", "station": "packing"}}})
 
-    def test_ambiguous_example_returns_both_complete_schedules(self):
+    def test_ambiguous(self):
         data, notes = example("ambiguous")
         answer = solve_problem(parse_problem(data, notes))
         self.assertEqual(answer["case"], "ambiguous")
@@ -38,7 +38,7 @@ class SolverTests(unittest.TestCase):
                           for a in answer["assignments"]},
                          {("09:00", "11:00"), ("11:00", "09:00")})
 
-    def test_inconsistent_example_removes_irrelevant_rule_and_proves_minimality(self):
+    def test_inconsistent(self):
         data, notes = example("inconsistent")
         solver = ScheduleSolver(parse_problem(data, notes))
         core = solver.minimal_conflict()
@@ -49,7 +49,7 @@ class SolverTests(unittest.TestCase):
         self.assertEqual(solver.result(), {"case": "inconsistent",
             "conflicts": [rule["source"] for rule in data["constraints"][:3]]})
 
-    def test_station_only_ambiguity_is_not_lost(self):
+    def test_station_only_ambiguity(self):
         data, _ = example("unique")
         data["constraints"] = data["constraints"][:2]
         answer = solve_problem(parse_problem(data))
@@ -58,7 +58,7 @@ class SolverTests(unittest.TestCase):
         self.assertEqual({a["Alice"]["station"] for a in answer["assignments"]},
                          {"intake", "packing"})
 
-    def test_background_enumerates_all_720_models_without_duplicates(self):
+    def test_enumerates_720(self):
         problem = parse_problem({"people": ["A", "B", "C", "D", "E"],
             "blocks": ["07:00", "09:00", "11:00", "13:00", "15:00"],
             "stations": ["intake", "packing", "calibration"],
@@ -71,14 +71,14 @@ class SolverTests(unittest.TestCase):
             self.assertEqual(len({assignment[p]["station"] for p in ["A", "C", "E"]}), 3)
             self.assertNotIn("station", assignment["B"])
 
-    def test_too_many_solutions_is_explicit_error_not_truncation(self):
+    def test_too_many_solutions(self):
         problem = parse_problem({"people": ["A", "B", "C"], "blocks": ["a", "b", "c"],
                                  "stations": [], "station_holders": [], "constraints": []})
         with self.assertRaises(ExtractionIncompleteError):
             solve_problem(problem)
         self.assertEqual(len(ScheduleSolver(problem).all_solutions()), 6)
 
-    def test_compound_statement_constraints_are_removed_together(self):
+    def test_compound_line(self):
         data = {"people": ["Alice", "Bob", "Carla"], "blocks": ["07:00", "09:00", "11:00"],
                 "stations": [], "station_holders": [], "constraints": [
             {"type": "fixed_block", "person": "Alice", "block": "07:00",
@@ -91,12 +91,12 @@ class SolverTests(unittest.TestCase):
         self.assertEqual(solver.minimal_conflict(), [1, 2])
         self.assertEqual(len(solver.result()["conflicts"]), 2)
 
-    def test_satisfiable_problem_has_no_core(self):
+    def test_sat_has_no_core(self):
         data, notes = example("unique")
         with self.assertRaises(SolverError):
             ScheduleSolver(parse_problem(data, notes)).minimal_conflict()
 
-    def test_every_rule_matches_independent_exhaustive_reference(self):
+    def test_rules_match_brute_force(self):
         base = {"people": ["A", "B", "C", "D"], "blocks": ["07:00", "09:00", "11:00", "13:00"],
                 "stations": ["intake", "packing"], "station_holders": ["A", "B"], "constraints": []}
         # Independent reference evaluates actual permutations, without Z3.
@@ -139,14 +139,14 @@ class SolverTests(unittest.TestCase):
 
 
 class SchemaTests(unittest.TestCase):
-    def test_exact_source_reference_and_blank_line_numbering(self):
+    def test_blank_lines_not_numbered(self):
         data, notes = example("unique")
         parse_problem(data, notes.replace("\n", "\n\n"))
         data["constraints"][0]["source"] = "Alice works at 07:00"
         with self.assertRaises(SchemaError):
             parse_problem(data, notes)
 
-    def test_rejects_unknown_entities_unexpected_fields_and_bad_headers(self):
+    def test_rejects_bad_problem(self):
         original, _ = example("unique")
         mutations = [
             lambda d: d["people"].append("Alice"),
@@ -164,7 +164,7 @@ class SchemaTests(unittest.TestCase):
             with self.subTest(data=data), self.assertRaises(SchemaError):
                 parse_problem(data)
 
-    def test_same_source_line_cannot_have_different_quotes(self):
+    def test_one_quote_per_line(self):
         data, _ = example("unique")
         data["constraints"][1]["source_line"] = 2
         with self.assertRaises(SchemaError):

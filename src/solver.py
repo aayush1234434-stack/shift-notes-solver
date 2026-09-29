@@ -1,5 +1,3 @@
-"""Exact schedule enumeration and deletion-minimal conflicts; no LLM calls."""
-
 import z3
 
 from .constraint_compiler import compile_problem
@@ -11,7 +9,7 @@ class SolverError(RuntimeError):
 
 
 class ExtractionIncompleteError(SolverError):
-    """The extraction has more solutions than the assignment permits."""
+    pass
 
 
 def check(solver) -> bool:
@@ -52,19 +50,12 @@ class ScheduleSolver:
         return solutions
 
     def minimal_conflict(self, prefer_lines=None) -> list[int]:
-        """Shrink complete source statements, keeping header rules permanent.
-
-        Minimal means no member can be removed, not globally smallest size.
-        Multiple extracted rules from one sentence are removed as a group.
-        Lines the model cited are dropped last, so a restatement it treated as
-        a constraint is kept when either line would complete a valid conflict.
-        """
+        # Deletion-minimal, not smallest: drop one line at a time while it stays unsat.
+        # prefer_lines are tried last, so they tend to survive into the citation.
         if self.is_satisfiable():
             raise SolverError("A satisfiable problem has no conflicting set")
         core = sorted(self.compiled.statements)
         prefer = set(prefer_lines or ())
-        # Uncited lines are removed first. With no preference this is line order,
-        # which is the same shrink the tests lock in.
         ordered = sorted(core, key=lambda number: (number in prefer, number))
         for number in ordered:
             trial = [line for line in core if line != number]

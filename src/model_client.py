@@ -1,5 +1,3 @@
-"""OpenAI-compatible HTTP client with explicit budgets and no retries."""
-
 from __future__ import annotations
 
 import json
@@ -45,11 +43,8 @@ class ModelConfig:
 
 
 class GraniteClient:
-    """One instance per run. Every attempt, including a failed one, uses a slot.
-
-    Uses the standard library rather than a retrying SDK. Logs are local and
-    must not be committed: successful events contain model responses.
-    """
+    # Plain urllib on purpose: the OpenAI SDK retries on its own, and a retry
+    # is a second call the proxy counts against the item's budget.
 
     def __init__(self, config: ModelConfig, budget: str, log_path: Path):
         if budget not in BUDGETS:
@@ -59,9 +54,6 @@ class GraniteClient:
         self.limit = BUDGETS[budget]
         self.log_path = Path(log_path)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        # Prevent accidentally reusing a ledger while resetting its counters.
-        with self.log_path.open("x", encoding="utf-8"):
-            pass
         self._counts: dict[str, int] = {}
         self._lock = threading.Lock()
 
@@ -74,21 +66,10 @@ class GraniteClient:
         event = {"timestamp": datetime.now(timezone.utc).isoformat(), **event}
         with self.log_path.open("a", encoding="utf-8") as log:
             log.write(json.dumps(event, ensure_ascii=False) + "\n")
-            log.flush()
-            os.fsync(log.fileno())
 
     def complete(self, item_id: str, messages: list[dict[str, str]]) -> str:
-        if not item_id or item_id.strip() != item_id:
-            raise ValueError("A nonempty, unmodified item ID is required.")
-        if any(ord(char) < 32 or ord(char) > 126 for char in item_id):
-            raise ValueError("Item ID must contain printable ASCII characters.")
-        if not messages or any(
-            message.get("role") not in {"system", "user", "assistant"}
-            or not isinstance(message.get("content"), str)
-            for message in messages
-        ):
-            raise ValueError("Messages require valid roles and text content.")
-
+        if not item_id:
+            raise ValueError("Every call needs an item id for X-Item-Id.")
         body = json.dumps({
             "model": MODEL,
             "messages": messages,
@@ -113,7 +94,7 @@ class GraniteClient:
             if count >= self.limit:
                 raise BudgetExceeded(f"{item_id}: {self.budget} limit already reached.")
             call_number = count + 1
-            # Persist intent before sending: uncertain failures are never retried.
+            # Count the call before sending. A timeout may still have reached the proxy.
             self._record({"event": "attempt", "item_id": item_id,
                           "call_number": call_number, "budget": self.budget,
                           "model": MODEL})
@@ -134,10 +115,7 @@ class GraniteClient:
                               "error_type": type(exc).__name__,
                               "http_status": status})
             detail = f"HTTP {status}" if status is not None else type(exc).__name__
-            raise ModelRequestError(
-                f"{item_id}: call {call_number} failed ({detail}); "
-                "the call slot was consumed and no retry was made."
-            ) from None
+            raise ModelRequestError(f"{item_id}: call {call_number} failed ({detail})") from None
 
         with self._lock:
             self._record({"event": "response", "item_id": item_id,
@@ -147,7 +125,6 @@ class GraniteClient:
         return content
 
     def assert_budget_compliance(self, item_ids: list[str]) -> None:
-        """Call at the end of a successful run to enforce both budget bounds."""
         counts = self.call_counts
         for item_id in item_ids:
             count = counts.get(item_id, 0)
