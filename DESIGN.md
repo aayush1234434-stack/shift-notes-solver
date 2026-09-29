@@ -12,6 +12,8 @@ I then let a sentence parser replace the model's rules whenever the line matched
 
 ## What runs now
 
+Constraint extraction is model-based. Python prints a menu of readings the named entities can support. Granite picks one letter, or `X`. The parser does not accept a reading by itself.
+
 Python reads the header. Those lists are regular, and asking Granite to copy them is how fake names got in.
 
 For each note line, Python writes a few readings the entities can support. A directional line gets both orders. A line about last month still gets a reading, so the model can reject it. A car-share, or any line with names but no order, gets no reading, only `X`. Granite answers with the line number and one letter:
@@ -31,11 +33,11 @@ The header parser exists so names and times stay exact. The menu exists because 
 
 Validation exists so a wrong or invented letter cannot smuggle in a person or a quote. The citation is the source line, not Granite's paraphrase. Z3 exists so "all of the schedules" and "a minimal conflict" are checked rather than guessed. The 3× and 10× calls exist because temperature is 1.0 and a single letter is noisy. They are capped because the budget is part of the grade, and 1× counts at least as much as 10×.
 
-Five ablations are wired, one component off at a time: the worked examples in the prompt, source-line checks, the review call, the extra line batches, and the minimal-conflict search. `python -m src.evaluate` runs them. I have not filled that table on the live model.
+Five ablations are wired, one component off at a time: the worked examples in the prompt, source-line checks, the review call, the extra line batches, and the minimal-conflict search. `python -m src.evaluate` runs them, and the table is in the README. One run per cell, so most differences are inside the noise. The minimal-conflict search is the one component with an unmistakable effect: without it every inconsistent item scores zero and macro falls by 10 to 17 points. The review call and the extra line batches only show a gap at 10× (25.0% and 28.3% against about 36%). The worked examples move the score by a few points in both directions. Source validation does nothing on this path, because every accepted letter already carries the full source line, so I would not defend it as a component.
 
 ## The numbers
 
-Three live runs, 60 visible items, 29 Sep 2026, on the code after the phrase list came out. One sample per budget. Macro exact match was 25% at 1× (60 calls), 23.33% at 3× (120 calls), and 35% at 10× (599 calls). Exact counts were unique 5/20, 4/20, 6/20; ambiguous 3/20, 4/20, 6/20; inconsistent 7/20, 6/20, 9/20. The endpoint did not fail. Most of the remaining misses are unique and ambiguous items declared inconsistent: 13, 15, and 11 unique items, and 16, 16, and 11 ambiguous items, at 1×, 3×, and 10×.
+Live runs on the 60 visible items, 29 Sep 2026, on the code after the phrase list came out. Two samples per budget for the full system. Macro exact match was 25% and 26.7% at 1× (60 calls), 23.33% and 20.0% at 3× (120 calls), and 35% and 36.7% at 10× (599 calls). The per-kind counts below are from the first sample at each budget. Exact counts were unique 5/20, 4/20, 6/20; ambiguous 3/20, 4/20, 6/20; inconsistent 7/20, 6/20, 9/20. The endpoint did not fail. Most of the remaining misses are unique and ambiguous items declared inconsistent: 13, 15, and 11 unique items, and 16, 16, and 11 ambiguous items, at 1×, 3×, and 10×.
 
 An older live 1× scored 31.67%, and a fixed-letter replay scored 100%. Both were measured before the phrase list was removed. The replay never called Granite. Neither number is a score for the code that ran here.
 
@@ -49,4 +51,4 @@ A third break is the menu itself. Granite cannot select a constraint that was no
 
 If a different person wrote the notes by hand, I would trust the header parse only while the header kept this shape. I would trust the menu when the sentence mentions the real names and a block, a station, or an order. I would not trust it for nicknames, for a constraint split across two lines, or for order language outside the cue list. In those cases the model is stuck with `X`, and a real rule disappears. That is the trade I accepted when I stopped letting the model write free JSON. Free JSON could say anything, and for this model it usually said something illegal. A menu can only be wrong in the ways it lists.
 
-I have now run 3× and 10× once each. 3× was a little worse than 1× and 10× was better, which is what one noisy sample looks like at temperature 1.0. The extra calls still reread lines instead of spending themselves on the letters that made a rota unsatisfiable. I would run each budget more than once before treating 35% as the 10× number, and I would stop the conflict search from returning a set that is one statement too small. I would not go back to asking Granite for the constraint JSON.
+I have run each budget twice for the full system. 3× was a little worse than 1× both times and 10× was better both times, though two samples at temperature 1.0 do not settle the 1× against 3× order. The extra calls still reread lines instead of spending themselves on the letters that made a rota unsatisfiable. I would run each cell of the ablation table several times before defending any single row except the conflict search. I would also stop that search from returning a set that is one statement too small. I would not go back to asking Granite for the constraint JSON.

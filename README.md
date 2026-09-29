@@ -123,9 +123,27 @@ On the 10× run, one of the seven unique labels had the wrong assignment, and th
 
 An earlier live 1× scored 31.67% (unique 9/20, ambiguous 4/20, inconsistent 6/20). A separate replay scored 100% by submitting, for each line, the letter that matches the current reading, with `X` on the rest. Granite was not called for that replay. Both numbers are from before the phrase list was removed. They are not scores for this code.
 
+## Ablations
+
+Each row turns one component off and keeps everything else. `python -m src.evaluate` produces the table. Each cell is one run on the 60 visible items, macro exact match, 29 Sep 2026. The full system was also measured in the runs above, so it has two samples per budget.
+
+| Configuration | 1× | 3× | 10× |
+|---|---|---|---|
+| Full system (this table's run) | 26.7% | 20.0% | 36.7% |
+| Full system (earlier run) | 25.0% | 23.3% | 35.0% |
+| Without prompt examples | 25.0% | 23.3% | 31.7% |
+| Without source validation | 25.0% | 25.0% | 40.0% |
+| Without extraction review | 25.0% | 21.7% | 25.0% |
+| Without sentence decomposition | 23.3% | 23.3% | 28.3% |
+| Without minimal conflict search | 15.0% | 11.7% | 20.0% |
+
+Calls for the same cells: 60 at 1× everywhere. At 3× the full system used 120, and removing the review call dropped it to 61. At 10× the full system used 599, removing the review call used 598, and removing the extra line batches used 120.
+
+The two full-system samples differ by up to 3.3 points at one budget, and a single item moves macro by 1.7 points. So most rows sit inside the noise. The clear result is the minimal conflict search. Without it the answer for a contradiction is an empty citation, and inconsistent items score 0/20 at every budget. That costs 10 to 17 macro points. The extraction review and the extra line batches show a gap at 10× (25.0% and 28.3% against about 36%), and that gap is the only other one outside the spread of the two full runs. Source validation has no effect on `./run`: every accepted letter already carries the full original line, so removing the check changes nothing. Its higher scores are sampling. The 1× review and batch ablations match the full system by construction, because those calls only exist at 3× and 10×.
+
 ## Limits
 
-The curve is one pass at each budget. 3× came out a little worse than 1×, and 10× came out better. With temperature 1.0 that order can move on the next run.
+The curve is two passes at each budget for the full system: 25.0% and 26.7% at 1×, 23.3% and 20.0% at 3×, and 35.0% and 36.7% at 10×. 3× came out a little worse than 1× both times, and 10× came out better both times. With temperature 1.0 the order between 1× and 3× is not settled by two samples.
 
 Most misses are still unique and ambiguous items called inconsistent. On 10× that was 11 of 20 unique items and 11 of 20 ambiguous items. Citations on real inconsistent items are short: mean cited set 2.8 lines at 1×, 2.55 at 3×, and 2.4 at 10×, against a mean core of 3.5 in the visible key. Exact inconsistent answers were 7, 6, and 9 of 20.
 
