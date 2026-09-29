@@ -171,8 +171,7 @@ def evaluate(items: Path, key: Path, scorer: Path, out_dir: Path,
         "model": MODEL, "temperature": 1.0, "top_p": 0.95,
         "reasoning": {"enabled": False}, "budgets": budgets, "variants": variants,
         "repeats": repeats,
-        "prompt_sha256": {name: checksum(ROOT / "prompts" / name)
-                          for name in ("extract.txt", "audit.txt", "batch_extract.txt")},
+        "prompt_sha256": checksum(ROOT / "prompts" / "extract.txt"),
     }
     write_json(out_dir / "manifest.json", manifest)
     results = {variant: {budget: [

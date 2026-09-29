@@ -8,7 +8,7 @@ I asked Granite to emit the constraint object: people, blocks, stations, and a l
 
 The replies were often not valid JSON. When they were, the types were wrong, "later than" came back as the opposite order, and the person field was sometimes a phrase like "whoever has intake" instead of a name from the header. Validation dropped those rules. Too few rules means more than four schedules, which this task does not allow, or an empty inconsistent answer. An empty conflict list scores zero, same as a blank assignment. Looking at completed 1× outputs from that setup, unique items were around one in ten and ambiguous and inconsistent items were not coming back right.
 
-I then let a sentence parser replace the model's rules whenever the line matched a pattern. On the visible 60 that scored perfectly, including when the model reply was thrown away. That is not a legal system. The assignment checks that answers change when the model output changes. I removed that overwrite from `./run`. The parser can propose readings. It does not accept them.
+I then let a sentence parser replace the model's rules whenever the line matched a pattern. On the visible 60 that scored perfectly, including when the model reply was thrown away. That is not a legal system. The assignment checks that answers change when the model output changes. That overwrite is gone from the repo. The parser can propose readings. It does not accept them.
 
 ## What runs now
 

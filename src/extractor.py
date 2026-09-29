@@ -5,8 +5,6 @@ from pathlib import Path
 from .schema import SchemaError, parse_problem
 
 ROOT = Path(__file__).resolve().parents[1]
-ORDER_TYPES = {"before", "after", "immediately_before", "immediately_after", "between",
-               "station_before_person", "station_after_person", "not_between"}
 ORDER_CONNECTOR = re.compile(
     r"\b(immediately before|directly before|right before|just before|"
     r"earlier in the day than|earlier than|ahead of|prior to|precedes|before|"
@@ -386,43 +384,6 @@ def interpret_line(line: str, header: dict, decide_status: bool = True):
     return ("ignore", [])
 
 
-def overlay_symbolic(data: dict, item: dict, header: dict,
-                     diagnostics: list[str] | None = None) -> None:
-    lines = numbered_lines(item)
-    by_line: dict[int, list] = {}
-    for rule in data["constraints"]:
-        if isinstance(rule, dict) and type(rule.get("source_line")) is int:
-            by_line.setdefault(rule["source_line"], []).append(rule)
-    ignored = {number for number in data.get("ignored_lines", []) if type(number) is int}
-    for number in note_line_numbers(item):
-        reading = interpret_line(lines[number - 1], header)
-        if reading is None:
-            continue
-        kind, rules = reading
-        if kind == "ignore":
-            if number in by_line and diagnostics is not None:
-                diagnostics.append(f"Line {number} is non-current or has no scheduling entities")
-            by_line.pop(number, None)
-            ignored.add(number)
-            continue
-        built = []
-        for rule in rules:
-            candidate = {"source_line": number, "source": lines[number - 1], **rule}
-            try:
-                parse_problem({**header, "constraints": [candidate]}, raw_text=item["text"])
-            except SchemaError as exc:
-                if diagnostics is not None:
-                    diagnostics.append(f"Symbolic rule on line {number} rejected: {exc}")
-                continue
-            built.append(candidate)
-        if not built:
-            continue
-        by_line[number] = built
-        ignored.discard(number)
-    data["constraints"] = [rule for number in sorted(by_line) for rule in by_line[number]]
-    data["ignored_lines"] = sorted(ignored)
-
-
 def model_cited_lines(response: str) -> set[int]:
     text = (response or "").strip()
     if text.startswith("```json\n") and text.endswith("\n```"):
@@ -450,17 +411,6 @@ def model_cited_lines(response: str) -> set[int]:
         if isinstance(rule, dict) and type(rule.get("source_line")) is int:
             found.add(rule["source_line"])
     return found
-
-
-def recover_from_text(item: dict, diagnostics: list[str] | None = None):
-    header = header_from_item(item)
-    data = {**header, "constraints": [], "ignored_lines": []}
-    overlay_symbolic(data, item, header, diagnostics)
-    classified = {rule["source_line"] for rule in data["constraints"]} | set(data["ignored_lines"])
-    missing = sorted(set(note_line_numbers(item)) - classified)
-    if missing:
-        raise SchemaError(f"Unclassified note lines: {missing}")
-    return parse_problem(data, raw_text=item["text"])
 
 
 def selection_prompt(prompt_examples: bool = True) -> str:
@@ -496,10 +446,13 @@ def _reject_constant(value):
 
 
 def decode_extraction(response: str, item: dict, source_validation: bool = True,
-                      salvage: bool = False, diagnostics: list[str] | None = None,
                       require_complete: bool = True):
+    """Turn a constraint JSON object into a problem. ./run does not call this.
+
+    The live path is letter selection. This remains so the example JSON files and
+    the source-check ablation can still be validated.
+    """
     text = response.strip()
-    # Deterministic envelope removal only; never rewrite extracted facts.
     if text.startswith("```json\n") and text.endswith("\n```"):
         text = text[len("```json\n"):-len("\n```")]
     elif text.startswith("```\n") and text.endswith("\n```"):
@@ -507,123 +460,54 @@ def decode_extraction(response: str, item: dict, source_validation: bool = True,
     try:
         data = json.loads(text, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
     except json.JSONDecodeError as exc:
-        if not salvage:
-            raise SchemaError(f"Malformed extraction JSON at character {exc.pos}") from None
-        start, end = text.find("{"), text.rfind("}")
-        if start < 0 or end <= start:
-            raise SchemaError(f"Malformed extraction JSON at character {exc.pos}") from None
-        try:
-            data = json.loads(text[start:end + 1], object_pairs_hook=_unique_object,
-                              parse_constant=_reject_constant)
-        except json.JSONDecodeError:
-            raise SchemaError(f"Malformed extraction JSON at character {exc.pos}") from None
-        if diagnostics is not None:
-            diagnostics.append("Used the JSON object embedded in the model response")
+        raise SchemaError(f"Malformed extraction JSON at character {exc.pos}") from None
     if not isinstance(data, dict):
         raise SchemaError("Extraction must be a JSON object")
     header = header_from_item(item)
     data = dict(data)
     for name, values in header.items():
         if name in data and data[name] != values:
-            if not salvage:
-                raise SchemaError(f"Extracted {name} disagrees with the header")
-            if diagnostics is not None:
-                diagnostics.append(f"Ignored model {name}; using the parsed header")
+            raise SchemaError(f"Extracted {name} disagrees with the header")
         data[name] = values
     if not isinstance(data.get("constraints"), list):
-        if not salvage:
-            raise SchemaError("constraints must be a list")
-        data["constraints"] = []
-        if diagnostics is not None:
-            diagnostics.append("Model constraints were not a list")
+        raise SchemaError("constraints must be a list")
     if not isinstance(data.get("ignored_lines"), list):
-        if not salvage:
-            raise SchemaError("ignored_lines must be an explicit list")
-        data["ignored_lines"] = []
-        if diagnostics is not None:
-            diagnostics.append("Model ignored_lines were not a list")
+        raise SchemaError("ignored_lines must be an explicit list")
     lines = numbered_lines(item)
     note_lines = set(note_line_numbers(item))
     ignored = data["ignored_lines"]
     if (any(type(number) is not int or number not in note_lines for number in ignored)
             or len(ignored) != len(set(ignored))):
-        if not salvage:
-            raise SchemaError("ignored_lines must contain unique non-header line numbers")
-        ignored = sorted({number for number in ignored
-                          if type(number) is int and number in note_lines})
-        data["ignored_lines"] = ignored
-        if diagnostics is not None:
-            diagnostics.append("Dropped invalid ignored line numbers")
+        raise SchemaError("ignored_lines must contain unique non-header line numbers")
     cited = set()
-    kept_rules = []
     for index, rule in enumerate(data["constraints"]):
         if not isinstance(rule, dict) or type(rule.get("source_line")) is not int or rule["source_line"] not in note_lines:
-            if salvage:
-                if diagnostics is not None:
-                    diagnostics.append(f"Dropped constraint {index} before validation")
-                continue
             raise SchemaError(f"Constraint {index} has an invalid non-header source_line")
         cited.add(rule["source_line"])
-        kept_rules.append(rule)
-    if salvage:
-        data["constraints"] = kept_rules
     overlap = cited & set(ignored)
     if overlap:
-        if not salvage:
-            raise SchemaError(f"Lines both constrained and ignored: {sorted(overlap)}")
-        data["ignored_lines"] = [number for number in ignored if number not in overlap]
-        ignored = data["ignored_lines"]
-        if diagnostics is not None:
-            diagnostics.append(f"Removed ignore marks from constrained lines: {sorted(overlap)}")
-    if require_complete and not salvage and note_lines - cited - set(ignored):
+        raise SchemaError(f"Lines both constrained and ignored: {sorted(overlap)}")
+    if require_complete and note_lines - cited - set(ignored):
         raise SchemaError(f"Unclassified note lines: {sorted(note_lines - cited - set(ignored))}")
     if source_validation:
         constraints = []
         seen = set()
         for index, raw_rule in enumerate(data["constraints"]):
-            try:
-                if not isinstance(raw_rule, dict):
-                    raise SchemaError(f"Constraint {index} must be an object")
-                number, evidence = raw_rule.get("source_line"), raw_rule.get("source")
-                if type(number) is not int or number not in note_lines:
-                    raise SchemaError(f"Constraint {index} has an invalid non-header source_line")
-                line = lines[number - 1]
-                if not isinstance(evidence, str) or not evidence.strip() or evidence not in line:
-                    raise SchemaError(f"Constraint {index} has evidence absent from line {number}")
-                if salvage and NONCURRENT.search(line):
-                    raise SchemaError(f"Constraint {index} cites a non-current or hypothetical line")
-                rule = {**raw_rule, "source": line}
-                if salvage and rule.get("type") in ORDER_TYPES:
-                    inferred = _unambiguous_order(line, header)
-                    if inferred is not None:
-                        rule = {"source_line": number, "source": line, **inferred}
-                if salvage:
-                    for field in ("person", "other_person", "third_person", "station", "block"):
-                        if (field in rule and isinstance(rule[field], str)
-                                and rule[field].casefold() not in line.casefold()):
-                            raise SchemaError(
-                                f"Constraint {index} has {field} absent from its source line")
-                parse_problem({**header, "constraints": [rule]}, raw_text=item["text"])
-                signature = json.dumps(rule, sort_keys=True)
-                if signature not in seen:
-                    constraints.append(rule)
-                    seen.add(signature)
-            except SchemaError as exc:
-                if not salvage:
-                    raise
-                if diagnostics is not None:
-                    diagnostics.append(f"Dropped model rule {index}: {exc}")
+            if not isinstance(raw_rule, dict):
+                raise SchemaError(f"Constraint {index} must be an object")
+            number, evidence = raw_rule.get("source_line"), raw_rule.get("source")
+            if type(number) is not int or number not in note_lines:
+                raise SchemaError(f"Constraint {index} has an invalid non-header source_line")
+            line = lines[number - 1]
+            if not isinstance(evidence, str) or not evidence.strip() or evidence not in line:
+                raise SchemaError(f"Constraint {index} has evidence absent from line {number}")
+            rule = {**raw_rule, "source": line}
+            parse_problem({**header, "constraints": [rule]}, raw_text=item["text"])
+            signature = json.dumps(rule, sort_keys=True)
+            if signature not in seen:
+                constraints.append(rule)
+                seen.add(signature)
         data["constraints"] = constraints
-    if salvage:
-        # A confident reading wins over a reversed, omitted, or ignored model rule.
-        # Lines this cannot read keep the model's validated rules, so the model
-        # still decides those sentences.
-        overlay_symbolic(data, item, header, diagnostics)
-    surviving = {rule["source_line"] for rule in data["constraints"] if isinstance(rule, dict)}
-    if require_complete and note_lines - surviving - set(data["ignored_lines"]):
-        raise SchemaError(
-            f"No valid classification remains for lines: "
-            f"{sorted(note_lines - surviving - set(data['ignored_lines']))}")
     problem = parse_problem(data, raw_text=item["text"] if source_validation else None)
     for name, values in (("people", problem.people), ("blocks", problem.blocks),
                          ("stations", problem.stations), ("station_holders", problem.station_holders)):
@@ -633,8 +517,3 @@ def decode_extraction(response: str, item: dict, source_validation: bool = True,
         if field in item and item[field] != actual:
             raise SchemaError(f"Extracted header disagrees with {field}")
     return problem
-
-
-def unclassified_lines(problem, item: dict) -> list[int]:
-    classified = {rule.source_line for rule in problem.constraints} | set(problem.ignored_lines)
-    return sorted(set(note_line_numbers(item)) - classified)

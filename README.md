@@ -73,7 +73,7 @@ Python reads the header. It does not ask the model to copy the staff list. For e
 
 At `3x`, a second call can change a letter. If some option-lines were never answered, a third call asks only for those. At `10x`, the remaining calls go back over lines that have options, still inside the cap of ten.
 
-The prompt `./run` sends is `prompts/extract.txt`. `prompts/audit.txt` and `prompts/batch_extract.txt` are an older JSON-edit format. The runner does not use them.
+The only prompt `./run` sends is `prompts/extract.txt`.
 
 ## Model
 

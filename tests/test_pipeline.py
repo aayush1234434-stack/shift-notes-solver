@@ -7,7 +7,6 @@ from pathlib import Path
 from src.extractor import (build_messages, decode_extraction, header_from_item,
                            header_line_number, note_line_numbers)
 from src.selection import menus_for_item
-from src.higher_budget import batches_for_item, decode_batch
 from src.model_client import ModelRequestError
 from src.output_writer import validate_answer
 from src.pipeline import answer_from_response, run_pipeline, validate_items
@@ -101,7 +100,6 @@ class PipelineTests(unittest.TestCase):
         data["ignored_lines"] = [1]
         self.assertEqual(header_line_number(item), 2)
         self.assertEqual(note_line_numbers(item), [1, 3, 4, 5])
-        self.assertEqual(batches_for_item(item, 2), [[1, 4], [3, 5]])
         self.assertIn("1: The printer was moved.", build_messages(item)[1]["content"])
         self.assertNotIn("2: Staff:", build_messages(item)[1]["content"])
         self.assertEqual(len(decode_extraction(json.dumps(data), item).constraints), 3)
@@ -135,68 +133,6 @@ class PipelineTests(unittest.TestCase):
         overlapping["ignored_lines"] = [2]
         with self.assertRaisesRegex(SchemaError, "both constrained and ignored"):
             decode_extraction(json.dumps(overlapping), item)
-
-    def test_salvage_order(self):
-        item = {"text": (
-            "Shift notes, Bay 4. 3 staff on the rota: Alice, Bob, Carla. "
-            "Blocks run 07:00, 09:00, 11:00, one person per block, and each person "
-            "works exactly one block. There are 2 stations, one person on each: "
-            "intake, packing. The people on a station are Alice, Bob; the rest are "
-            "on no station.\n\n"
-            "Alice is on the block immediately before Bob.\n"
-            "Carla works later than whoever has intake.\n"
-            "Last month Alice was on packing.\n"
-            "There is no block between Alice's and Bob's, in that order.\n"
-            "The printer has been moved."), "n_staff": 3, "n_stations": 2}
-        raw = {"constraints": [
-            {"type": "immediately_before", "person": "Bob", "other_person": "Alice",
-             "source_line": 2, "source": "Alice is on the block immediately before Bob."},
-            {"type": "before", "person": "Carla", "other_person": "whoever has intake",
-             "source_line": 3, "source": "Carla works later than whoever has intake."},
-            {"type": "not_between", "person": "Bob", "other_person": "Alice",
-             "source_line": 5, "source": "There is no block between Alice's and Bob's, in that order."}],
-            "ignored_lines": [4, 6]}
-        issues = []
-        problem = decode_extraction(json.dumps(raw), item, salvage=True, diagnostics=issues)
-        self.assertEqual([(rule.source_line, rule.type, rule.person, rule.other_person,
-                           rule.station) for rule in problem.constraints], [
-            (2, "immediately_before", "Alice", "Bob", None),
-            (3, "station_before_person", "Carla", None, "intake"),
-            (5, "immediately_before", "Alice", "Bob", None)])
-        self.assertEqual(problem.ignored_lines, (4, 6))
-        self.assertEqual(len(issues), 0)
-
-    def test_salvage_clear_line(self):
-        item, data = invented_item("unique")
-        bad = copy.deepcopy(data)
-        bad["constraints"][0]["person"] = "Invented"
-        issues = []
-        problem = decode_extraction(json.dumps(bad), item, salvage=True, diagnostics=issues)
-        self.assertEqual(problem.constraints[0].person, "Alice")
-        self.assertEqual(problem.constraints[0].type, "fixed_block")
-        self.assertTrue(issues)
-
-        unclear = "Alice and Bob both mentioned 07:00 in the margin."
-        item["text"] += unclear + "\n"
-        invented = {"type": "before", "person": "Invented", "other_person": "Bob",
-                    "source_line": 5, "source": unclear}
-        rejected = copy.deepcopy(data)
-        rejected["constraints"].append(invented)
-        with self.assertRaisesRegex(SchemaError, "No valid classification remains"):
-            decode_extraction(json.dumps(rejected), item, salvage=True)
-
-    def test_batch_omission(self):
-        item, data = invented_item("unique")
-        problem = decode_extraction(json.dumps(data), item)
-        with self.assertRaisesRegex(SchemaError, "Unclassified batch lines"):
-            decode_batch('{"constraints": [], "ignored_lines": []}', item, problem, [2])
-        bad = copy.deepcopy(data["constraints"][0])
-        bad["person"] = "Invented"
-        repaired = decode_batch(json.dumps({"constraints": [bad], "ignored_lines": []}),
-                                item, problem, [2], salvage=True)
-        restored = next(rule for rule in repaired.constraints if rule.source_line == 2)
-        self.assertEqual(restored.person, "Alice")
-        self.assertEqual(restored.block, "07:00")
 
     def test_full_run(self):
         items, responses = [], {}
