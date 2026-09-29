@@ -101,15 +101,6 @@ def _entities_in(text: str, values: list[str]) -> list[str]:
             if re.search(r"(?<!\w)" + re.escape(value) + r"(?!\w)", text, re.IGNORECASE)]
 
 
-def _mentioned(text: str, values: list[str]) -> list[str]:
-    found = []
-    for value in values:
-        match = re.search(r"(?<!\w)" + re.escape(value) + r"(?!\w)", text, re.IGNORECASE)
-        if match:
-            found.append((match.start(), value))
-    return [value for _, value in sorted(found)]
-
-
 def _unambiguous_order(line: str, header: dict) -> dict | None:
     people = header["people"]
     stations = header["stations"]
@@ -232,97 +223,6 @@ def _assignment_rules(body: str, header: dict, people: list[str],
     return []
 
 
-def _pair_around(text: str, header: dict, verb: str):
-    match = re.search(verb, text, re.IGNORECASE)
-    if match is None:
-        return None
-    left = _mentioned(text[:match.start()], header["people"])
-    right = _mentioned(text[match.end():], header["people"])
-    if len(left) == 1 and len(right) == 1:
-        return left[0], right[0]
-    return None
-
-
-def _known_idiom(body: str, header: dict):
-    people = _mentioned(body, header["people"])
-    blocks = _entities_in(body, header["blocks"])
-    stations = _entities_in(body, header["stations"])
-    holders = set(header["station_holders"])
-
-    def block_rule(kind: str):
-        if len(people) == 1 and len(blocks) == 1 and not stations:
-            return ("rules", [{"type": kind, "person": people[0], "block": blocks[0]}])
-        return None
-
-    def station_rule(kind: str):
-        if len(people) == 1 and people[0] in holders and len(stations) == 1 and not blocks:
-            return ("rules", [{"type": kind, "person": people[0], "station": stations[0]}])
-        return None
-
-    if re.search(r"\brules out the\b|\bunavailable at\b|\bwill not find\b", body, re.IGNORECASE):
-        return block_rule("not_block")
-    if re.search(r"\bdefinitely not on\b", body, re.IGNORECASE) and blocks:
-        return block_rule("not_block")
-    if re.search(r"\bblock is not\b", body, re.IGNORECASE):
-        return block_rule("not_block")
-    if re.search(r"\bblock is\b", body, re.IGNORECASE) and re.search(r"'s\b", body):
-        found = block_rule("fixed_block")
-        if found:
-            return found
-    if re.search(r"\bwhoever drew the\b", body, re.IGNORECASE) and re.search(r"\bit was\b", body, re.IGNORECASE):
-        return block_rule("fixed_block")
-    if re.search(r"\btakes\b", body, re.IGNORECASE) and re.search(r"\bas things stand\b", body, re.IGNORECASE):
-        return block_rule("fixed_block")
-    if re.search(r"\bopens up at\b", body, re.IGNORECASE):
-        return block_rule("fixed_block")
-    if re.search(r"\bis when\b", body, re.IGNORECASE) and re.search(r"\bscheduled\b", body, re.IGNORECASE):
-        return block_rule("fixed_block")
-    if re.search(r"\brule\b", body, re.IGNORECASE) and re.search(r"\bout for\b", body, re.IGNORECASE):
-        return station_rule("not_station")
-    if re.search(r"\bcovered by someone other than\b", body, re.IGNORECASE):
-        return station_rule("not_station")
-    if re.search(r"\bdown to\b", body, re.IGNORECASE):
-        return station_rule("fixed_station")
-    if re.search(r"\bis not\b", body, re.IGNORECASE) and re.search(r"\bstation\b", body, re.IGNORECASE):
-        found = station_rule("not_station")
-        if found:
-            return found
-    if re.search(r"'s station\b", body, re.IGNORECASE):
-        found = station_rule("fixed_station")
-        if found:
-            return found
-    if re.search(r"\bthis week\b", body, re.IGNORECASE):
-        found = station_rule("fixed_station")
-        if found:
-            return found
-    if (re.search(r"\bcovered by\b", body, re.IGNORECASE)
-            and not re.search(r"\bsomeone other than\b|\bbefore\b", body, re.IGNORECASE)):
-        found = station_rule("fixed_station")
-        if found:
-            return found
-
-    relieved = _pair_around(body, header, r"\brelieves\b")
-    if relieved and re.search(r"\b(?:directly|no block in between)\b", body, re.IGNORECASE):
-        earlier, later = relieved[1], relieved[0]
-        return ("rules", [{"type": "immediately_before", "person": earlier, "other_person": later}])
-    takeover = _pair_around(body, header, r"\btakes over from\b")
-    if takeover:
-        earlier, later = takeover[1], takeover[0]
-        return ("rules", [{"type": "before", "person": earlier, "other_person": later}])
-    handover = _pair_around(body, header, r"\bhands straight over to\b")
-    if handover:
-        return ("rules", [{"type": "immediately_before", "person": handover[0], "other_person": handover[1]}])
-    back_to_back = _pair_around(body, header, r"\bthen\b")
-    if back_to_back and re.search(r"\bback to back\b", body, re.IGNORECASE):
-        return ("rules", [{"type": "immediately_before",
-                           "person": back_to_back[0], "other_person": back_to_back[1]}])
-    if (re.search(r"\bby the time\b", body, re.IGNORECASE)
-            and re.search(r"\balready been on\b", body, re.IGNORECASE) and len(people) == 2):
-        later, earlier = people[0], people[1]
-        return ("rules", [{"type": "before", "person": earlier, "other_person": later}])
-    return None
-
-
 def interpret_clause(line: str, header: dict, decide_status: bool = True):
     # decide_status=False keeps "last month" and "whether" lines on the menu, so Granite
     # is the one that rejects them.
@@ -331,9 +231,6 @@ def interpret_clause(line: str, header: dict, decide_status: bool = True):
         return ("ignore", [])
     if decide_status and _UNSETTLED.search(body):
         return ("ignore", [])
-    idiom = _known_idiom(body, header)
-    if idiom is not None:
-        return idiom
     people = _entities_in(body, header["people"])
     blocks = _entities_in(body, header["blocks"])
     stations = _entities_in(body, header["stations"])

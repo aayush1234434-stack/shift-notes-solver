@@ -27,7 +27,7 @@ At 3× there is a review call that can change a letter, and a follow-up if some 
 
 ## Why each piece is there
 
-The header parser exists so names and times stay exact. The menu exists because Granite is bad at inventing a schema and good enough, sometimes, at picking between two printed sentences. `X` exists so social lines, old rotas, and open questions are the model's decision. If Python dropped those lines itself, a different wording of the same line would be classified by the phrase list, and the model would not have done the work.
+The header parser exists so names and times stay exact. The menu exists because Granite is bad at inventing a schema and good enough, sometimes, at picking between two printed sentences. `X` exists so social lines, old rotas, and open questions are the model's decision. The menu is built from the names, times, and stations in the sentence, not from a catalog of note phrases. I removed that catalog. Phrases such as "opens up at" and "whoever drew the" were copied from the visible set, and the held-out notes will not use them.
 
 Validation exists so a wrong or invented letter cannot smuggle in a person or a quote. The citation is the source line, not Granite's paraphrase. Z3 exists so "all of the schedules" and "a minimal conflict" are checked rather than guessed. The 3× and 10× calls exist because temperature is 1.0 and a single letter is noisy. They are capped because the budget is part of the grade, and 1× counts at least as much as 10×.
 
@@ -37,7 +37,7 @@ Five ablations are wired, one component off at a time: the worked examples in th
 
 One live 1× run, 60 visible items, 29 Sep 2026. Macro exact match 31.67%. Unique 9/20, ambiguous 4/20, inconsistent 6/20. Every inconsistent item was labeled inconsistent. Fourteen of them cited the wrong lines. Nine unique items and fifteen ambiguous items were called inconsistent. One ambiguous item was labeled ambiguous and still missed a schedule.
 
-There is also a 100% figure. It is an oracle replay. I walked the same code and, for each line, submitted the letter that matches the current reading, with `X` on every other line. Granite was not called. That replay is evidence that the menus cover this visible set when the letter is right. It is not a model score, and it will not be the held-out score.
+There is also a 100% figure. It is an oracle replay from before that phrase list was removed. I walked the code and, for each line, submitted the letter that matches the current reading, with `X` on every other line. Granite was not called. It is not a model score. Neither that replay nor the 31.67% live run has been repeated on the code without the phrase list.
 
 3× and 10× are unmeasured.
 

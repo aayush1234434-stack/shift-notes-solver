@@ -111,7 +111,7 @@ One live `1x` run on the 60 visible items, on 29 Sep 2026. Macro exact match **3
 
 `3x` and `10x` have not been run, so there is no live score for them.
 
-A separate replay scored 100% on the same 60 items: 20/20 unique, 20/20 ambiguous, 20/20 inconsistent. That replay fed a fixed letter for each line, the one that matches the current reading, and `X` on the rest. Granite was not called. It is an oracle check that the menus can express this set. It is not model accuracy.
+A separate replay scored 100% on the same 60 items: 20/20 unique, 20/20 ambiguous, 20/20 inconsistent. That replay fed a fixed letter for each line, the one that matches the current reading, and `X` on the rest. Granite was not called. It is an oracle check, not model accuracy. Both numbers were measured before the visible-set phrase list was removed from the menu builder, and neither has been re-run since.
 
 ## Limits
 
