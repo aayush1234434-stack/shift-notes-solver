@@ -6,14 +6,11 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
-from .extractor import _reject_constant, _unique_object, decode_extraction, unclassified_lines
+from .extractor import (_reject_constant, _unique_object, decode_extraction,
+                        note_line_numbers, numbered_lines, unclassified_lines)
 from .schema import Problem, SchemaError
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def numbered_lines(item: dict) -> list[str]:
-    return [line for line in item["text"].splitlines() if line.strip()]
 
 
 def _parse_json(raw: str):
@@ -51,7 +48,8 @@ def audit_messages(item: dict, problem: Problem) -> list[dict[str, str]]:
 
 def batch_messages(item: dict, problem: Problem, line_numbers: list[int]) -> list[dict[str, str]]:
     lines = numbered_lines(item)
-    if not line_numbers or any(type(n) is not int or not 2 <= n <= len(lines) for n in line_numbers):
+    if not line_numbers or any(type(n) is not int or n not in note_line_numbers(item)
+                               for n in line_numbers):
         raise ValueError("Batch lines must be non-header source lines")
     prompt = (ROOT / "prompts" / "batch_extract.txt").read_text(encoding="utf-8")
     header = {key: value for key, value in problem_data(problem).items()
@@ -95,7 +93,7 @@ def _validate_edits(item: dict, edits, allowed_lines: set[int],
 def apply_edits(item: dict, problem: Problem, edits: list[dict],
                 source_validation: bool = True, salvage: bool = False,
                 diagnostics: list[str] | None = None) -> Problem:
-    allowed = set(range(2, len(numbered_lines(item)) + 1))
+    allowed = set(note_line_numbers(item))
     edits = _validate_edits(item, edits, allowed, source_validation)
     data = problem_data(problem)
     replaced = {edit["source_line"] for edit in edits}
@@ -124,7 +122,7 @@ def decode_audit(raw: str, item: dict, problem: Problem,
     if not isinstance(data, dict) or set(data) != {"edits"}:
         raise SchemaError("Audit response needs only an edits array")
     edits = _validate_edits(item, data["edits"],
-                            set(range(2, len(numbered_lines(item)) + 1)), source_validation)
+                            set(note_line_numbers(item)), source_validation)
     return (apply_edits(item, problem, edits, source_validation, salvage, diagnostics),
             [edit["source_line"] for edit in edits])
 
@@ -182,7 +180,7 @@ def decode_batch(raw: str, item: dict, problem: Problem, line_numbers: list[int]
 
 
 def batches_for_item(item: dict, max_batches: int) -> list[list[int]]:
-    line_numbers = list(range(2, len(numbered_lines(item)) + 1))
+    line_numbers = note_line_numbers(item)
     count = min(max_batches, len(line_numbers))
     if not count:
         return []

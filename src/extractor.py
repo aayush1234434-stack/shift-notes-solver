@@ -19,7 +19,7 @@ NONCURRENT = re.compile(
     r"put in for|asked to move|request was declined|without success)\b",
     re.IGNORECASE)
 VISIBLE_HEADER = re.compile(
-    r"(?P<count>\d+) staff on the rota: (?P<people>.*?)\. Blocks run "
+    r"(?:[^.\n]*\.\s*)?(?P<count>\d+) staff on the rota: (?P<people>.*?)\. Blocks run "
     r"(?P<blocks>.*?), one person per block, and each person works exactly one block\. "
     r"There are (?P<station_count>\d+) stations, one person on each: "
     r"(?P<stations>.*?)\. The people on a station are (?P<station_holders>.*?); "
@@ -36,13 +36,28 @@ def numbered_lines(item: dict) -> list[str]:
     return [line for line in item["text"].splitlines() if line.strip()]
 
 
+def _header_match(item: dict):
+    matches = [(number, match) for number, line in enumerate(numbered_lines(item), 1)
+               if (match := VISIBLE_HEADER.fullmatch(line) or SIMPLE_HEADER.fullmatch(line))]
+    if len(matches) != 1:
+        raise SchemaError(f"Expected exactly one complete rota header line; found {len(matches)}")
+    return matches[0]
+
+
+def header_line_number(item: dict) -> int:
+    return _header_match(item)[0]
+
+
+def note_line_numbers(item: dict) -> list[int]:
+    header_number = header_line_number(item)
+    return [number for number in range(1, len(numbered_lines(item)) + 1)
+            if number != header_number]
+
+
 def header_from_item(item: dict) -> dict[str, list[str]]:
     """Read the standardized rota header without asking Granite to reproduce it."""
-    line = numbered_lines(item)[0]
-    match = VISIBLE_HEADER.search(line) or SIMPLE_HEADER.fullmatch(line)
-    if match is None:
-        raise SchemaError("Unrecognized rota header")
-    values = {name: [entry.strip() for entry in match[name].split(", ")]
+    _, match = _header_match(item)
+    values = {name: match[name].split(", ")
               for name in ("people", "blocks", "stations", "station_holders")}
     if match.re is VISIBLE_HEADER and (
         len(values["people"]) != int(match["count"])
@@ -53,6 +68,7 @@ def header_from_item(item: dict) -> dict[str, list[str]]:
                             ("n_stations", len(values["stations"]))):
         if field in item and item[field] != expected:
             raise SchemaError(f"Header disagrees with {field}")
+    parse_problem({**values, "constraints": []})
     return values
 
 
@@ -120,7 +136,7 @@ def build_messages(item: dict, prompt_examples: bool = True) -> list[dict[str, s
         {"role": "system", "content": prompt},
         {"role": "user", "content": "Header lists (already parsed; do not extract the header):\n" +
          json.dumps(header, ensure_ascii=False) + "\n\nNumbered note lines:\n" +
-         "\n".join(f"{number}: {line}" for number, line in enumerate(lines[1:], 2))},
+         "\n".join(f"{number}: {lines[number - 1]}" for number in note_line_numbers(item))},
     ]
 
 
@@ -163,7 +179,7 @@ def decode_extraction(response: str, item: dict, source_validation: bool = True,
     if not isinstance(data.get("ignored_lines"), list):
         raise SchemaError("ignored_lines must be an explicit list")
     lines = numbered_lines(item)
-    note_lines = set(range(2, len(lines) + 1))
+    note_lines = set(note_line_numbers(item))
     ignored = data["ignored_lines"]
     if (any(type(number) is not int or number not in note_lines for number in ignored)
             or len(ignored) != len(set(ignored))):
@@ -185,7 +201,7 @@ def decode_extraction(response: str, item: dict, source_validation: bool = True,
                 if not isinstance(raw_rule, dict):
                     raise SchemaError(f"Constraint {index} must be an object")
                 number, evidence = raw_rule.get("source_line"), raw_rule.get("source")
-                if type(number) is not int or not 2 <= number <= len(lines):
+                if type(number) is not int or number not in note_lines:
                     raise SchemaError(f"Constraint {index} has an invalid non-header source_line")
                 line = lines[number - 1]
                 if not isinstance(evidence, str) or not evidence.strip() or evidence not in line:
@@ -231,4 +247,4 @@ def decode_extraction(response: str, item: dict, source_validation: bool = True,
 def unclassified_lines(problem, item: dict) -> list[int]:
     """Return note lines with neither an accepted rule nor an explicit ignore."""
     classified = {rule.source_line for rule in problem.constraints} | set(problem.ignored_lines)
-    return sorted(set(range(2, len(numbered_lines(item)) + 1)) - classified)
+    return sorted(set(note_line_numbers(item)) - classified)

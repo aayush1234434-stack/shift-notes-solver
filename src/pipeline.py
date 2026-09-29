@@ -10,9 +10,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .extractor import build_messages, decode_extraction, header_from_item, unclassified_lines
+from .extractor import (build_messages, decode_extraction, header_from_item,
+                        note_line_numbers, unclassified_lines)
 from .higher_budget import (audit_messages, batch_messages, batches_for_item,
-                            decode_audit, decode_batch, numbered_lines)
+                            decode_audit, decode_batch)
 from .model_client import BUDGETS, GraniteClient, MODEL, ModelConfig, ModelRequestError
 from .output_writer import atomic_json, validate_answer, write_answers
 from .schema import SchemaError, parse_problem
@@ -221,7 +222,7 @@ def solve_item(item: dict, client: GraniteClient, record: dict, records: list,
         if not target and solve_count(problem) not in {1, 2, 3, 4}:
             # Anomalous count: re-extract the non-header lines as a focused
             # one-call batch. Genuine contradictions are allowed to remain.
-            target = list(range(2, len(numbered_lines(item)) + 1))
+            target = note_line_numbers(item)
         if target:
             raw = optional_call("focused_reextract", batch_messages(item, problem, target))
             if raw is not None:

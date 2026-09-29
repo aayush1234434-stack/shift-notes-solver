@@ -4,8 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.extractor import build_messages, decode_extraction, header_from_item
-from src.higher_budget import decode_batch
+from src.extractor import (build_messages, decode_extraction, header_from_item,
+                           header_line_number, note_line_numbers)
+from src.higher_budget import batches_for_item, decode_batch
 from src.model_client import ModelRequestError
 from src.output_writer import validate_answer
 from src.pipeline import answer_from_response, run_pipeline, validate_items
@@ -80,6 +81,29 @@ class PipelineTests(unittest.TestCase):
             "blocks": ["07:00", "09:00", "11:00"],
             "stations": ["intake", "packing"],
             "station_holders": ["Alice", "Carla"]})
+
+    def test_header_can_follow_a_note_without_shifting_source_numbers(self):
+        item, data = invented_item("unique")
+        item["text"] = "The printer was moved.\n" + item["text"]
+        for rule in data["constraints"]:
+            rule["source_line"] += 1
+        data["ignored_lines"] = [1]
+        self.assertEqual(header_line_number(item), 2)
+        self.assertEqual(note_line_numbers(item), [1, 3, 4, 5])
+        self.assertEqual(batches_for_item(item, 2), [[1, 4], [3, 5]])
+        self.assertIn("1: The printer was moved.", build_messages(item)[1]["content"])
+        self.assertNotIn("2: Staff:", build_messages(item)[1]["content"])
+        self.assertEqual(len(decode_extraction(json.dumps(data), item).constraints), 3)
+
+    def test_header_must_be_complete_unique_and_exact(self):
+        item, _ = invented_item("unique")
+        header = item["text"].splitlines()[0]
+        for text in (header + " Extra text.\nAlice works at 07:00.",
+                     header + "\n" + header + "\nAlice works at 07:00."):
+            with self.subTest(text=text), self.assertRaisesRegex(SchemaError, "header line"):
+                header_from_item({**item, "text": text})
+        exact = {**item, "text": header.replace("Alice", "ALIce") + "\nALIce works at 07:00."}
+        self.assertEqual(header_from_item(exact)["people"][0], "ALIce")
 
     def test_short_exact_evidence_is_canonicalized_without_inferred_ignores(self):
         item, data = invented_item("unique")
