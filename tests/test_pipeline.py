@@ -295,6 +295,50 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(all(prompt[0]["content"].startswith("Extract scheduling rules from")
                             for prompt in client.prompts[1:]))
 
+    def test_ten_budget_splits_failed_bootstrap_batch_and_reaches_audit(self):
+        item, correct = invented_item("unique")
+        item["text"] += "The printer was moved.\nThe break room is upstairs.\n"
+        by_line = {rule["source_line"]: rule for rule in correct["constraints"]}
+        failed_once = False
+
+        def respond(messages):
+            nonlocal failed_once
+            if "Current extraction:" in messages[1]["content"]:
+                return '{"edits": []}'
+            selected = messages[1]["content"].split("Lines to extract:\n", 1)[1]
+            numbers = [int(line.split(":", 1)[0]) for line in selected.splitlines()]
+            if len(numbers) > 1 and not failed_once:
+                failed_once = True
+                return '{"constraints": [], "ignored_lines": []}'
+            return json.dumps({"constraints": [by_line[n] for n in numbers if n in by_line],
+                               "ignored_lines": [n for n in numbers if n not in by_line]})
+
+        client = SequenceClient("10x", ["not JSON"] + [respond] * 9)
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir, output = Path(directory) / "run", Path(directory) / "answer.json"
+            run_pipeline([item], client, run_dir, output, "10x")
+            self.assertEqual(json.loads(output.read_text())[item["id"]]["case"], "unique")
+            record = json.loads((run_dir / "records.json").read_text())[0]
+            kinds = [attempt["kind"] for attempt in record["attempts"]]
+            self.assertEqual(kinds[0], "full_extraction")
+            self.assertIn("bootstrap_audit", kinds)
+            self.assertNotIn("full_reextract", kinds)
+            self.assertLessEqual(len(kinds), 10)
+
+    def test_ten_budget_failed_batches_do_not_audit_partial_extraction(self):
+        item, _ = invented_item("unique")
+        client = SequenceClient("10x", ["not JSON"] * 10)
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir, output = Path(directory) / "run", Path(directory) / "answer.json"
+            run_pipeline([item], client, run_dir, output, "10x")
+            record = json.loads((run_dir / "records.json").read_text())[0]
+            kinds = [attempt["kind"] for attempt in record["attempts"]]
+            self.assertEqual(record["status"], "unresolved")
+            self.assertIn("Unclassified note lines", record["error"])
+            self.assertNotIn("bootstrap_audit", kinds)
+            self.assertNotIn("full_reextract", kinds)
+            self.assertTrue(all(kind == "bootstrap_batch" for kind in kinds[1:]))
+
     def test_rejected_audit_cannot_inject_unsupported_source(self):
         item, data = invented_item("unique")
         broken = {"edits": [{"source_line": 3, "constraints": [

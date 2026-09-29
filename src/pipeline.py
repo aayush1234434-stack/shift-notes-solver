@@ -135,22 +135,40 @@ def solve_item(item: dict, client: GraniteClient, record: dict, records: list,
         return answer, status, "; ".join(filter(None, [*issues, error])) or None
 
     if problem is None and ablate != "sentence_decomposition":
-        # An invalid page extraction no longer consumes the whole 10x budget
-        # on repeated page-sized attempts. The header is parsed from the notes,
-        # so independent line batches can be validated and merged from scratch.
+        # Recover from an invalid page response using independently validated
+        # line batches. Failed batches are split, so their remaining lines can
+        # still be recovered within the same per-item call cap.
         header = header_from_item(item)
         problem = parse_problem({**header, "constraints": [], "ignored_lines": []}, item["text"])
-        batch_count = cap - len(record["attempts"]) - (1 if budget == "10x" else 0)
-        for target in batches_for_item(item, batch_count):
-            raw = optional_call("bootstrap_batch", batch_messages(item, problem, target))
-            if raw is None:
+        pending = batches_for_item(item, min(4, cap - len(record["attempts"])))
+        singleton_failures = {}
+        while pending and len(record["attempts"]) < cap:
+            target = [line for line in pending.pop(0) if line in unclassified_lines(problem, item)]
+            if not target:
                 continue
-            try:
-                problem = decode_batch(raw, item, problem, target, source_validation,
-                                       salvage=True, diagnostics=issues)
-            except SchemaError as exc:
-                issues.append(f"Bootstrap batch {target} rejected: {exc}")
-        if budget == "10x" and len(record["attempts"]) < cap:
+            raw = optional_call("bootstrap_batch", batch_messages(item, problem, target))
+            if raw is not None:
+                try:
+                    problem = decode_batch(raw, item, problem, target, source_validation,
+                                           salvage=True, diagnostics=issues)
+                    continue
+                except SchemaError as exc:
+                    issues.append(f"Bootstrap batch {target} rejected: {exc}")
+            if len(target) > 1:
+                midpoint = len(target) // 2
+                pending.extend((target[:midpoint], target[midpoint:]))
+            else:
+                line = target[0]
+                singleton_failures[line] = singleton_failures.get(line, 0) + 1
+                if singleton_failures[line] < 2:
+                    pending.append(target)
+                else:
+                    issues.append(f"Bootstrap line {line} remains unclassified after two attempts")
+        missing = unclassified_lines(problem, item)
+        if missing:
+            return ({"case": "inconsistent", "conflicts": []}, "unresolved",
+                    "; ".join([*issues, f"Unclassified note lines: {missing}"]))
+        if budget == "10x" and ablate != "extraction_review" and len(record["attempts"]) < cap:
             raw = optional_call("bootstrap_audit", audit_messages(item, problem))
             if raw is not None:
                 try:
@@ -158,6 +176,15 @@ def solve_item(item: dict, client: GraniteClient, record: dict, records: list,
                                               salvage=True, diagnostics=issues)
                 except SchemaError as exc:
                     issues.append(f"Bootstrap audit rejected: {exc}")
+        if budget == "10x" and len(record["attempts"]) < cap and not unclassified_lines(problem, item):
+            for target in batches_for_item(item, cap - len(record["attempts"])):
+                raw = optional_call("small_batch_reextract", batch_messages(item, problem, target))
+                if raw is not None:
+                    try:
+                        problem = decode_batch(raw, item, problem, target, source_validation,
+                                               salvage=True, diagnostics=issues)
+                    except SchemaError as exc:
+                        issues.append(f"Batch {target} rejected: {exc}")
         missing = unclassified_lines(problem, item)
         if missing:
             return ({"case": "inconsistent", "conflicts": []}, "unresolved",
