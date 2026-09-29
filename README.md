@@ -101,55 +101,52 @@ Inconsistent. Each string is one full note line. The set must be unsatisfiable, 
 
 ## What has been measured
 
-Three live runs on the 60 visible items, 29 Sep 2026, after the visible-set phrase list was removed from the menu builder. Temperature is 1.0, so each budget is one sample, not an average. The endpoint answered every item. Macro exact match is the mean of the three kind rates.
+Every number below is macro exact match on the 60 visible items. Temperature is 1.0. A prompt is identified by the SHA-256 of `prompts/extract.txt`, which is what `python -m src.evaluate` records.
 
-| Budget | Calls | Macro | Unique | Ambiguous | Inconsistent |
-|---|---|---|---|---|---|
-| 1× | 60 (1 each) | 25% | 5/20 | 3/20 | 7/20 |
-| 3× | 120 (2 each) | 23.33% | 4/20 | 4/20 | 6/20 |
-| 10× | 599 (9 or 10 each) | 35% | 6/20 | 6/20 | 9/20 |
+The submitted prompt is `e89a46577c8c4eac9d1c1266e4d5300d26a665993c43b38ef2eb390fa0e9624b`.
 
-At 3× every item used the selection call and the review call. None needed the third call, because every line that had options was answered on the first pass. At 10× the spare calls went back over those lines. One item used 9 calls and the other 59 used 10.
+The ablation table is two runs per cell of that prompt, 29 Sep 2026. Full system: **40.8% at 1×, 40.8% at 3×, 41.7% at 10×**. Per kind, exact: unique 37.5% / 32.5% / 35.0%, ambiguous 52.5% / 50.0% / 37.5%, inconsistent 32.5% / 40.0% / 52.5%. Mean calls were 60, 120.5, and 599. The curve is flat. Extra calls do not raise the score.
 
-Declared kind, true kind down the rows. The exact column is stricter than the label: a right label with the wrong schedule or the wrong citation is still a miss.
+Six more 1× runs of the same prompt, not part of the table, averaged **45.0%** (standard deviation 2.5). All eight 1× runs of this hash together average **44.0%** (standard deviation 2.9). The table's own 1× cell is the 40.8% above. A re-run of two samples can land on either side of that spread.
+
+Declared kind in the table, pooled over the two runs, so each true kind sums to 40. Exact match is stricter than the label.
 
 | Budget | True unique → unique / ambiguous / inconsistent | True ambiguous | True inconsistent |
 |---|---|---|---|
-| 1× | 5 / 2 / 13 | 0 / 4 / 16 | 1 / 1 / 18 |
-| 3× | 4 / 1 / 15 | 0 / 4 / 16 | 0 / 2 / 18 |
-| 10× | 7 / 2 / 11 | 0 / 9 / 11 | 2 / 3 / 15 |
+| 1× | 18 / 12 / 10 | 2 / 33 / 5 | 3 / 11 / 26 |
+| 3× | 17 / 13 / 10 | 2 / 32 / 6 | 4 / 8 / 28 |
+| 10× | 16 / 17 / 7 | 2 / 31 / 7 | 3 / 11 / 26 |
 
-On the 10× run, one of the seven unique labels had the wrong assignment, and three of the nine ambiguous labels did not list a complete set of real schedules. Those show up in the confusion counts and not in the exact counts.
+An earlier draft of the prompt, hash `6b74f5d9ac2399cd818ba0654ba09f60db046c2b15529621b64c82d935ebe01f`, averaged 45.3% over six 1× runs. That text is not in the repo. It is not a score for the submitted prompt.
 
-An earlier live 1× scored 31.67% (unique 9/20, ambiguous 4/20, inconsistent 6/20). A separate replay scored 100% by submitting, for each line, the letter that matches the current reading, with `X` on the rest. Granite was not called for that replay. Both numbers are from before the phrase list was removed. They are not scores for this code.
+The previous prompt in git, hash `a3663d77e4002520f508230a527b47ce413b2e02decb5e09e228728c81807de9`, scored about 25% at 1×, about 23% at 3×, and about 35% at 10×, one or two runs each. A still older 1× scored 31.67%, and a fixed-letter replay scored 100% without calling Granite. Both of those predate the phrase-list removal. None of these are scores for the submitted prompt.
 
 ## Ablations
 
-Each row turns one component off and keeps everything else. `python -m src.evaluate` produces the table. Each cell is one run on the 60 visible items, macro exact match, 29 Sep 2026. The full system was also measured in the runs above, so it has two samples per budget.
+Same submitted prompt, two runs per cell. `python -m src.evaluate` rebuilds the table.
 
 | Configuration | 1× | 3× | 10× |
 |---|---|---|---|
-| Full system (this table's run) | 26.7% | 20.0% | 36.7% |
-| Full system (earlier run) | 25.0% | 23.3% | 35.0% |
-| Without prompt examples | 25.0% | 23.3% | 31.7% |
-| Without source validation | 25.0% | 25.0% | 40.0% |
-| Without extraction review | 25.0% | 21.7% | 25.0% |
-| Without sentence decomposition | 23.3% | 23.3% | 28.3% |
-| Without minimal conflict search | 15.0% | 11.7% | 20.0% |
+| Full system | 40.8% | 40.8% | 41.7% |
+| Without prompt examples | 34.2% | 35.0% | 28.3% |
+| Without source validation | 45.8% | 44.2% | 45.0% |
+| Without extraction review | 45.8% | 40.0% | 44.2% |
+| Without sentence decomposition | 48.3% | 47.5% | 41.7% |
+| Without minimal conflict search | 26.7% | 30.8% | 30.8% |
 
-Calls for the same cells: 60 at 1× everywhere. At 3× the full system used 120, and removing the review call dropped it to 61. At 10× the full system used 599, removing the review call used 598, and removing the extra line batches used 120.
+Calls: 60 at every 1× cell. At 3× the full system averaged 120.5, and removing the review call dropped that to 61. At 10× the full system used 599, removing the review used 598, and removing the extra line batches used 120.
 
-The two full-system samples differ by up to 3.3 points at one budget, and a single item moves macro by 1.7 points. So most rows sit inside the noise. The clear result is the minimal conflict search. Without it the answer for a contradiction is an empty citation, and inconsistent items score 0/20 at every budget. That costs 10 to 17 macro points. The extraction review and the extra line batches show a gap at 10× (25.0% and 28.3% against about 36%), and that gap is the only other one outside the spread of the two full runs. Source validation has no effect on `./run`: every accepted letter already carries the full original line, so removing the check changes nothing. Its higher scores are sampling. The 1× review and batch ablations match the full system by construction, because those calls only exist at 3× and 10×.
+The conflict search is the component whose removal moves the score on purpose. Without it, inconsistent items score 0 and macro drops by about 10 to 14 points. Removing the worked examples costs about 6 points at 1× and 3× and about 13 at 10×. The 10× gap is outside the spread of the eight full-system 1× runs. The smaller gaps are not.
+
+Source validation does not change `./run`: an accepted letter is already stored with the full original line. The review call and the extra batches do not run at 1×, so those 1× rows are the same code path as the full system and the higher scores are sampling. At 3× and 10×, turning them off does not lower the score. The spare calls are not where the accuracy is.
 
 ## Limits
 
-The curve is two passes at each budget for the full system: 25.0% and 26.7% at 1×, 23.3% and 20.0% at 3×, and 35.0% and 36.7% at 10×. 3× came out a little worse than 1× both times, and 10× came out better both times. With temperature 1.0 the order between 1× and 3× is not settled by two samples.
+On this prompt the curve does not rise with the budget. 1× and 10× are about the same, which is the shape the brief asks for, at a modest level.
 
-Most misses are still unique and ambiguous items called inconsistent. On 10× that was 11 of 20 unique items and 11 of 20 ambiguous items. Citations on real inconsistent items are short: mean cited set 2.8 lines at 1×, 2.55 at 3×, and 2.4 at 10×, against a mean core of 3.5 in the visible key. Exact inconsistent answers were 7, 6, and 9 of 20.
+Ambiguous items are the kind this prompt gets right most often at 1×. Inconsistent items are limited by short citations: a right label with one line too few still scores zero. Unique items are still often called ambiguous or inconsistent.
 
-A few items produced more than four schedules, so the answer is a truncated ambiguous list: 2 items at 1×, 1 at 3×, 3 at 10×. Those do not score as exact.
-
-The held-out set uses different wording and has not been run. If a sentence does not name header entities in a way the menu understands, Granite can only answer `X`, because it cannot invent a reading that was not printed.
+The held-out set has not been run. A menu can only offer a reading built from the names, blocks, stations, and ordinary order words in the line. Other wording can only be answered `X`.
 
 ## Key handling
 
