@@ -101,23 +101,35 @@ Inconsistent. Each string is one full note line. The set must be unsatisfiable, 
 
 ## What has been measured
 
-One live `1x` run on the 60 visible items, on 29 Sep 2026. Macro exact match **31.67%**.
+Three live runs on the 60 visible items, 29 Sep 2026, after the visible-set phrase list was removed from the menu builder. Temperature is 1.0, so each budget is one sample, not an average. The endpoint answered every item. Macro exact match is the mean of the three kind rates.
 
-| Kind | Exact |
-|---|---|
-| Unique | 9/20 |
-| Ambiguous | 4/20 |
-| Inconsistent | 6/20 |
+| Budget | Calls | Macro | Unique | Ambiguous | Inconsistent |
+|---|---|---|---|---|---|
+| 1× | 60 (1 each) | 25% | 5/20 | 3/20 | 7/20 |
+| 3× | 120 (2 each) | 23.33% | 4/20 | 4/20 | 6/20 |
+| 10× | 599 (9 or 10 each) | 35% | 6/20 | 6/20 | 9/20 |
 
-`3x` and `10x` have not been run, so there is no live score for them.
+At 3× every item used the selection call and the review call. None needed the third call, because every line that had options was answered on the first pass. At 10× the spare calls went back over those lines. One item used 9 calls and the other 59 used 10.
 
-A separate replay scored 100% on the same 60 items: 20/20 unique, 20/20 ambiguous, 20/20 inconsistent. That replay fed a fixed letter for each line, the one that matches the current reading, and `X` on the rest. Granite was not called. It is an oracle check, not model accuracy. Both numbers were measured before the visible-set phrase list was removed from the menu builder, and neither has been re-run since.
+Declared kind, true kind down the rows. The exact column is stricter than the label: a right label with the wrong schedule or the wrong citation is still a miss.
+
+| Budget | True unique → unique / ambiguous / inconsistent | True ambiguous | True inconsistent |
+|---|---|---|---|
+| 1× | 5 / 2 / 13 | 0 / 4 / 16 | 1 / 1 / 18 |
+| 3× | 4 / 1 / 15 | 0 / 4 / 16 | 0 / 2 / 18 |
+| 10× | 7 / 2 / 11 | 0 / 9 / 11 | 2 / 3 / 15 |
+
+On the 10× run, one of the seven unique labels had the wrong assignment, and three of the nine ambiguous labels did not list a complete set of real schedules. Those show up in the confusion counts and not in the exact counts.
+
+An earlier live 1× scored 31.67% (unique 9/20, ambiguous 4/20, inconsistent 6/20). A separate replay scored 100% by submitting, for each line, the letter that matches the current reading, with `X` on the rest. Granite was not called for that replay. Both numbers are from before the phrase list was removed. They are not scores for this code.
 
 ## Limits
 
-Conflict citations are often wrong. All 20 inconsistent items were labeled inconsistent, and only 6 cited a minimal set.
+The curve is one pass at each budget. 3× came out a little worse than 1×, and 10× came out better. With temperature 1.0 that order can move on the next run.
 
-Unique and ambiguous items are often called inconsistent. Nine unique items and fifteen ambiguous items were declared inconsistent on that run. One more ambiguous item was labeled ambiguous but did not list every schedule.
+Most misses are still unique and ambiguous items called inconsistent. On 10× that was 11 of 20 unique items and 11 of 20 ambiguous items. Citations on real inconsistent items are short: mean cited set 2.8 lines at 1×, 2.55 at 3×, and 2.4 at 10×, against a mean core of 3.5 in the visible key. Exact inconsistent answers were 7, 6, and 9 of 20.
+
+A few items produced more than four schedules, so the answer is a truncated ambiguous list: 2 items at 1×, 1 at 3×, 3 at 10×. Those do not score as exact.
 
 The held-out set uses different wording and has not been run. If a sentence does not name header entities in a way the menu understands, Granite can only answer `X`, because it cannot invent a reading that was not printed.
 
