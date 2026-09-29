@@ -10,12 +10,13 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from .answer_validation import AnswerValidationError, validate_answer_for_problem
 from .extractor import (build_messages, decode_extraction, header_from_item,
                         note_line_numbers, unclassified_lines)
 from .higher_budget import (audit_messages, batch_messages, batches_for_item,
                             decode_audit, decode_batch)
 from .model_client import BUDGETS, GraniteClient, MODEL, ModelConfig, ModelRequestError
-from .output_writer import atomic_json, validate_answer, write_answers
+from .output_writer import atomic_json, write_answers
 from .schema import SchemaError, parse_problem
 from .solver import ExtractionIncompleteError, ScheduleSolver, SolverError
 
@@ -57,11 +58,11 @@ def answer_from_problem(problem, minimal_conflict_search: bool = True) -> tuple[
             # No second call exists at 1x. Return a documented partial attempt
             # rather than inventing rules. All emitted schedules satisfy extraction.
             answer = {"case": "ambiguous", "assignments": solver.all_solutions()[:4]}
-            validate_answer(answer)
+            validate_answer_for_problem(answer, problem, allow_partial=True)
             return answer, "partial_extraction", str(exc)
-        validate_answer(answer)
+        validate_answer_for_problem(answer, problem)
         return answer, "solved_from_extraction", None
-    except (SchemaError, SolverError) as exc:
+    except (SchemaError, SolverError, AnswerValidationError) as exc:
         # There is no abstention shape in the assignment. An empty conflicting
         # set earns zero credit; logs explicitly label this as unresolved, not
         # as a certified contradiction. Never fabricate names or citations.
