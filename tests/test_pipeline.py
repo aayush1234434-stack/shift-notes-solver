@@ -236,16 +236,19 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(client.call_counts[item["id"]], 1)
 
     def test_endpoint_failure(self):
-        first, data = invented_item("unique")
+        first, _ = invented_item("unique")
         second, _ = invented_item("ambiguous")
-        client = FakeClient({first["id"]: ModelRequestError("HTTP 402")})
+        client = FakeClient({first["id"]: ModelRequestError("HTTP 402"),
+                              second["id"]: selection_text(second)})
         with tempfile.TemporaryDirectory() as directory:
             run_dir, output = Path(directory) / "run", Path(directory) / "answers.json"
             output.write_text("older output")
-            with self.assertRaises(ModelRequestError):
-                run_pipeline([first, second], client, run_dir, output)
-            self.assertEqual(output.read_text(), "older output")
-            self.assertEqual(client.call_counts, {first["id"]: 1})
+            run_pipeline([first, second], client, run_dir, output)
+            answers = json.loads(output.read_text())
+            self.assertEqual(answers[first["id"]], {"case": "inconsistent", "conflicts": []})
+            self.assertIn(second["id"], answers)
+            self.assertEqual(client.call_counts[first["id"]], 1)
+            self.assertEqual(client.call_counts[second["id"]], 1)
             self.assertEqual(json.loads((run_dir / "records.json").read_text())[0]["status"],
                              "endpoint_failure")
 

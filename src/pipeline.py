@@ -112,7 +112,13 @@ def solve_item(item: dict, client: GraniteClient, record: dict, records: list,
 
     messages = build_messages(item, prompt_examples)
     record["messages"] = messages
-    response = call("selection", messages)
+    try:
+        response = call("selection", messages)
+    except ModelRequestError as exc:
+        # A failed first call still counts. Leave a zero-scoring answer and
+        # move on, so one timeout does not throw away the rest of the file.
+        issues.append(str(exc))
+        return {"case": "inconsistent", "conflicts": []}, "endpoint_failure", "; ".join(issues)
     record["response"] = response
     _absorb(choices, response)
 

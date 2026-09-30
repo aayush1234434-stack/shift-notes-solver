@@ -38,7 +38,7 @@ MODEL=ibm-granite/granite-4.2-8b
 ./run items.json --budget 1x --out answers.json
 ```
 
-`1x` is one model call per item. `3x` allows up to three, `10x` up to ten. Every item gets at least one call. A call that fails still uses its slot, and the client does not retry it.
+`1x` is one model call per item. `3x` allows up to three, `10x` up to ten. Every item gets at least one call. A call that fails still uses its slot, and the client does not retry it. If the first call for an item fails, that item is written as an empty inconsistent answer, which scores zero, and the run continues.
 
 ```bash
 ./run items.json --budget 3x --out answers.json
@@ -123,7 +123,15 @@ The previous prompt in git, hash `a3663d77e4002520f508230a527b47ce413b2e02decb5e
 
 ## Ablations
 
-Same submitted prompt, two runs per cell. `python -m src.evaluate` rebuilds the table.
+Same submitted prompt, two runs per cell. Rebuild it with the scorer and key from the candidate package. The default `--timeout-seconds` is 360. A 10× cell is about 600 calls and takes longer than that, so the run below uses 1800:
+
+```bash
+python -m src.evaluate \
+  --items items.json \
+  --key visible_key.json \
+  --score-script score.py \
+  --timeout-seconds 1800
+```
 
 | Configuration | 1× | 3× | 10× |
 |---|---|---|---|
